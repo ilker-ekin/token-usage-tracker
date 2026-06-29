@@ -1,16 +1,5 @@
-# Compiled class file
+# Java
 *.class
-
-# Log file
-*.log
-
-# BlueJ files
-*.ctxt
-
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
-# Package Files #
 *.jar
 *.war
 *.nar
@@ -18,7 +7,57 @@
 *.zip
 *.tar.gz
 *.rar
-
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+*.log
+*.ctxt
+.mtj.tmp/
 hs_err_pid*
 replay_pid*
+
+# Maven
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# IDE — IntelliJ
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# IDE — Eclipse / STS
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# IDE — NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# IDE — VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Spring Boot generated docs
+HELP.md
+
+# Claude Code
+.claude/
+CLAUDE/
+implementation_plan.md
+
+# Local config overrides (passwords, API keys — never commit)
+**/application-local.properties
+**/application-local.yml
