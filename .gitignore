@@ -61,3 +61,5 @@ implementation_plan.md
 # Local config overrides (passwords, API keys — never commit)
 **/application-local.properties
 **/application-local.yml
+.env
+*.env
