@@ -1,4 +1,5 @@
 package dev.ekin.tokenusage.security;
+// ci
 
 import dev.ekin.tokenusage.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
