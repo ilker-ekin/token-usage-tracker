@@ -1,5 +1,4 @@
 package dev.ekin.tokenusage.security;
-// ci
 
 import dev.ekin.tokenusage.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
@@ -50,6 +49,17 @@ class SecurityFilterChainTest {
     void ingestEndpoint_requiresAuthentication() throws Exception {
         mockMvc.perform(post("/usage"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * The login endpoint must be public — it is how clients get a token in
+     * the first place. An empty body yields 400 (validation), proving the
+     * request reached the controller instead of being rejected with 401.
+     */
+    @Test
+    void tokenEndpoint_isPublic() throws Exception {
+        mockMvc.perform(post("/auth/token").contentType("application/json").content("{}"))
+                .andExpect(status().isBadRequest());
     }
 
     /**
