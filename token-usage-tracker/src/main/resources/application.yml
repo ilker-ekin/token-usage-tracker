@@ -26,12 +26,13 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
-  # Placeholder until JWT auth lands in Phase 1; never deploy permitAll
-  security:
-    user:
-      name: ${SECURITY_USER_NAME:admin}
-      # empty default → Spring keeps a generated random password
-      password: ${SECURITY_USER_PASSWORD:}
+app:
+  jwt:
+    # HS256 needs >= 32 bytes. The default only works under the 'dev'
+    # profile — everywhere else startup fails unless JWT_SECRET is set
+    # (enforced in JwtConfig).
+    secret: ${JWT_SECRET:local-dev-only-secret-change-me-0123456789abcdef}
+    ttl: ${JWT_TTL:PT12H}
 
 management:
   endpoints:
