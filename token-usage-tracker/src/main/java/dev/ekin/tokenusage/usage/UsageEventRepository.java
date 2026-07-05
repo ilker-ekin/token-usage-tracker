@@ -1,6 +1,7 @@
 package dev.ekin.tokenusage.usage;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -9,7 +10,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-public interface UsageEventRepository extends JpaRepository<UsageEvent, UUID> {
+public interface UsageEventRepository
+		extends JpaRepository<UsageEvent, UUID>, JpaSpecificationExecutor<UsageEvent> {
 
 	interface UsageAggregate {
 		UUID getOrgId();

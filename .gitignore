@@ -63,3 +63,7 @@ implementation_plan.md
 **/application-local.yml
 .env
 *.env
+
+# Frontend (ui/)
+node_modules/
+ui/dist/
