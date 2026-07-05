@@ -28,15 +28,18 @@ public class RollupRecomputeJob {
 	private final DailyRollupRepository dailyRollupRepository;
 	private final WeeklyRollupRepository weeklyRollupRepository;
 	private final MonthlyRollupRepository monthlyRollupRepository;
+	private final AnalyticsCacheService analyticsCacheService;
 
 	public RollupRecomputeJob(UsageEventRepository usageEventRepository,
 			DailyRollupRepository dailyRollupRepository,
 			WeeklyRollupRepository weeklyRollupRepository,
-			MonthlyRollupRepository monthlyRollupRepository) {
+			MonthlyRollupRepository monthlyRollupRepository,
+			AnalyticsCacheService analyticsCacheService) {
 		this.usageEventRepository = usageEventRepository;
 		this.dailyRollupRepository = dailyRollupRepository;
 		this.weeklyRollupRepository = weeklyRollupRepository;
 		this.monthlyRollupRepository = monthlyRollupRepository;
+		this.analyticsCacheService = analyticsCacheService;
 	}
 
 	@Scheduled(cron = "0 30 2 * * *", zone = "UTC")
@@ -57,6 +60,7 @@ public class RollupRecomputeJob {
 		}
 		weekStarts.forEach(this::rebuildWeek);
 		monthStarts.forEach(this::rebuildMonth);
+		analyticsCacheService.evictAll();
 
 		log.info("Recomputed rollups for {}..{} ({} weeks, {} months)",
 				fromDay, toDay, weekStarts.size(), monthStarts.size());
