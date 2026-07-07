@@ -70,3 +70,9 @@ ui/dist/
 
 # Local notes
 questions.md
+
+# Claude assistant files — never publish
+CLAUDE.md
+**/CLAUDE.md
+skills.md
+SKILL.md
