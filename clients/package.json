@@ -1,0 +1,13 @@
+{
+  "name": "token-usage-tracker-clients",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "ask": "node --env-file-if-exists=.env ask.mjs",
+    "verify": "node --env-file-if-exists=.env verify-costs.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0"
+  }
+}

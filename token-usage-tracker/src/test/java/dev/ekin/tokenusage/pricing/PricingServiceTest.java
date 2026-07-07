@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PricingServiceTest {
 
-	private final PricingService pricingService = new PricingService(null);
+	private final PricingService pricingService = new PricingService(null, null);
 
 	private static ModelPricing pricing(String inputPer1k, String outputPer1k) {
 		return new ModelPricing("claude-sonnet-4-6",
