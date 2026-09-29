@@ -34,6 +34,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -209,6 +210,34 @@ class UsageIngestionIntegrationTest {
 		assertThat(daily.getTotalInputTokens()).isEqualTo(2000);
 		assertThat(daily.getTotalOutputTokens()).isEqualTo(4000);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.066");
+	}
+
+	@Test
+	void ingestIntoAnotherOrgsProjectIsRejectedAsNotFound() throws Exception {
+		Organization otherOrg = organizationRepository.save(new Organization("Other Org", "other-org"));
+		Project foreign = projectRepository.save(new Project(otherOrg.getId(), "foreign-project"));
+		String token = obtainToken();
+
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + token)
+						.contentType("application/json")
+						.content(ingestJson().replace(project.getId().toString(), foreign.getId().toString())))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.detail").value("Project not found: " + foreign.getId()));
+
+		assertThat(usageEventRepository.count()).isZero();
+		assertThat(dailyRollupRepository.count()).isZero();
+	}
+
+	@Test
+	void ingestIntoUnknownProjectLooksTheSameAsForeignProject() throws Exception {
+		UUID unknown = UUID.randomUUID();
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(ingestJson().replace(project.getId().toString(), unknown.toString())))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.detail").value("Project not found: " + unknown));
 	}
 
 	@Test

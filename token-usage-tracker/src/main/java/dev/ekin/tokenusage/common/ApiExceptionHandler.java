@@ -1,6 +1,7 @@
 package dev.ekin.tokenusage.common;
 
 import dev.ekin.tokenusage.pricing.PricingNotFoundException;
+import dev.ekin.tokenusage.tenant.ProjectNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -18,6 +19,11 @@ public class ApiExceptionHandler {
 	@ExceptionHandler(PricingNotFoundException.class)
 	ProblemDetail handlePricingNotFound(PricingNotFoundException e) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
+	}
+
+	@ExceptionHandler(ProjectNotFoundException.class)
+	ProblemDetail handleProjectNotFound(ProjectNotFoundException e) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
 	}
 
 }

@@ -6,6 +6,8 @@ import dev.ekin.tokenusage.pricing.ModelPricing;
 import dev.ekin.tokenusage.pricing.PricingService;
 import dev.ekin.tokenusage.tenant.Member;
 import dev.ekin.tokenusage.tenant.MemberRepository;
+import dev.ekin.tokenusage.tenant.ProjectNotFoundException;
+import dev.ekin.tokenusage.tenant.ProjectRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -23,15 +25,18 @@ public class UsageService {
 
 	private final UsageEventRepository usageEventRepository;
 	private final MemberRepository memberRepository;
+	private final ProjectRepository projectRepository;
 	private final PricingService pricingService;
 	private final RollupService rollupService;
 	private final AnalyticsCacheService analyticsCacheService;
 
 	public UsageService(UsageEventRepository usageEventRepository,
-			MemberRepository memberRepository, PricingService pricingService,
+			MemberRepository memberRepository, ProjectRepository projectRepository,
+			PricingService pricingService,
 			RollupService rollupService, AnalyticsCacheService analyticsCacheService) {
 		this.usageEventRepository = usageEventRepository;
 		this.memberRepository = memberRepository;
+		this.projectRepository = projectRepository;
 		this.pricingService = pricingService;
 		this.rollupService = rollupService;
 		this.analyticsCacheService = analyticsCacheService;
@@ -45,11 +50,15 @@ public class UsageService {
 	 * Persists the event with its cost snapshotted at ingest time and updates
 	 * all three rollups in the same transaction. Cached analytics for the org
 	 * are evicted so the dashboard reflects the write within one request.
+	 * The project must belong to the member's org; a foreign project is
+	 * reported exactly like a missing one.
 	 */
 	@Transactional
 	public UsageEvent ingest(UUID memberId, IngestCommand command) {
 		Member member = memberRepository.findById(memberId)
 				.orElseThrow(() -> new NoSuchElementException("Member not found: " + memberId));
+		projectRepository.findByIdAndOrgId(command.projectId(), member.getOrgId())
+				.orElseThrow(() -> new ProjectNotFoundException(command.projectId()));
 
 		ModelPricing pricing = pricingService.findActivePricing(command.model(), command.eventTime());
 		BigDecimal cost = pricingService.computeCost(pricing,

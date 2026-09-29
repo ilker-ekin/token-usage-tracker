@@ -76,6 +76,7 @@ class AnalyticsIntegrationTest {
 	Member alice;
 	Member bob;
 	Member otherOrgMember;
+	Project otherOrgProject;
 	Project checkout;
 	Project search;
 	String token;
@@ -114,7 +115,7 @@ class AnalyticsIntegrationTest {
 		Team teamB = teamRepository.save(new Team(orgB.getId(), "B Team"));
 		otherOrgMember = memberRepository.save(new Member(orgB.getId(), teamB.getId(),
 				"eve@b.dev", "Eve", null, "MEMBER"));
-		Project projectB = projectRepository.save(new Project(orgB.getId(), "b-project"));
+		otherOrgProject = projectRepository.save(new Project(orgB.getId(), "b-project"));
 
 		// Org A: alice 2 events on checkout, bob 1 event on search
 		ingest(alice, checkout, 1000, 2000); // cost 0.033
@@ -122,7 +123,7 @@ class AnalyticsIntegrationTest {
 		ingest(bob, search, 2000, 1000);     // cost 0.021
 		// Org B noise
 		usageService.ingest(otherOrgMember.getId(), new IngestCommand(
-				projectB.getId(), "claude-sonnet-4-6", 50_000, 50_000, 0, 0, EVENT_TIME));
+				otherOrgProject.getId(), "claude-sonnet-4-6", 50_000, 50_000, 0, 0, EVENT_TIME));
 	}
 
 	private void ingest(Member member, Project project, int in, int out) {
@@ -194,6 +195,38 @@ class AnalyticsIntegrationTest {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.totalElements").value(1))
 				.andExpect(jsonPath("$.content[0].memberId").value(bob.getId().toString()));
+	}
+
+	@Test
+	void usageDrillDownIgnoresIdsFromAnotherOrg() throws Exception {
+		mockMvc.perform(get("/usage?memberId=" + otherOrgMember.getId())
+						.header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalElements").value(0));
+
+		mockMvc.perform(get("/usage?projectId=" + otherOrgProject.getId())
+						.header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalElements").value(0));
+	}
+
+	@Test
+	void otherOrgSeesOnlyItsOwnAnalytics() throws Exception {
+		String otherToken = jwtService.issueToken(otherOrgMember);
+		mockMvc.perform(get("/analytics/projects?" + RANGE)
+						.header("Authorization", "Bearer " + otherToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].name").value("b-project"));
+		mockMvc.perform(get("/analytics/members?" + RANGE)
+						.header("Authorization", "Bearer " + otherToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].displayName").value("Eve"));
+		mockMvc.perform(get("/usage")
+						.header("Authorization", "Bearer " + otherToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalElements").value(1));
 	}
 
 	@Test
