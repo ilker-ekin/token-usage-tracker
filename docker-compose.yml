@@ -1,0 +1,61 @@
+# Full demo stack: `docker compose up --build`, then open http://localhost:3000
+# and log in as member1@acme.dev / seed-password.
+#
+# The API runs with the `dev` profile, which seeds a demo org (10 members,
+# 30 days of usage) on first start. Credentials below are for this local
+# demo only. For day-to-day development, token-usage-tracker/docker-compose.yml
+# starts just Postgres and Redis.
+
+# Explicit, so this stack never collides with the dev-only compose project.
+name: token-usage-tracker-demo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: token_usage
+      POSTGRES_USER: tut
+      POSTGRES_PASSWORD: tut
+    volumes:
+      - demo_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tut -d token_usage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./token-usage-tracker
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DB_URL: jdbc:postgresql://postgres:5432/token_usage
+      DB_USERNAME: tut
+      DB_PASSWORD: tut
+      REDIS_HOST: redis
+      JWT_SECRET: docker-compose-demo-only-secret-0123456789abcdef
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ui:
+    build: ./ui
+    ports:
+      - "3000:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  demo_postgres:

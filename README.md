@@ -1,5 +1,7 @@
 # Token Usage Tracker
 
+[![CI](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml)
+
 Track how much your team spends on LLM API calls. Applications report their token usage after each call; the tracker prices every event, aggregates the numbers, and shows spend per organization, team, project, and member on a web dashboard.
 
 ## How it works
