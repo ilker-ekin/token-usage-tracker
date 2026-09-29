@@ -75,16 +75,6 @@ Open http://localhost:5173 and log in:
 
 You should see 30 days of demo spend across the Overview, Trends, Members, Projects, and Teams pages (on port 3000 for the Docker quick start).
 
-## Screenshots
-
-| Overview | Trends |
-|---|---|
-| ![Overview](docs/screenshots/overview.png) | ![Trends](docs/screenshots/trends.png) |
-
-| Members | Projects | Teams |
-|---|---|---|
-| ![Members](docs/screenshots/members.png) | ![Projects](docs/screenshots/projects.png) | ![Teams](docs/screenshots/teams.png) |
-
 ## API overview
 
 All endpoints require a `Authorization: Bearer <token>` header except login and health.
