@@ -5,7 +5,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -31,49 +30,25 @@ public class RollupService {
 
 	/**
 	 * Applies one event to all three rollups. Runs inside the ingest
-	 * transaction so the event and its rollups commit atomically.
+	 * transaction so the event and its rollups commit atomically. Each write
+	 * is a native upsert that adds to the row in place, which makes concurrent
+	 * ingests for the same member/project/period safe without explicit locking.
+	 * The tables are always touched in the same order (daily, weekly, monthly),
+	 * so two ingests can never deadlock on each other's rows.
 	 */
 	@Transactional(propagation = Propagation.MANDATORY)
-	public void apply(UsageEvent event) {
-		LocalDate day = LocalDate.ofInstant(event.getEventTime(), ZoneOffset.UTC);
-		long linesAdded = event.getLinesAdded() == null ? 0 : event.getLinesAdded();
-		long linesRemoved = event.getLinesRemoved() == null ? 0 : event.getLinesRemoved();
+	public void apply(UsageEvent e) {
+		LocalDate day = LocalDate.ofInstant(e.getEventTime(), ZoneOffset.UTC);
+		long linesAdded = e.getLinesAdded() == null ? 0 : e.getLinesAdded();
+		long linesRemoved = e.getLinesRemoved() == null ? 0 : e.getLinesRemoved();
 
-		applyDaily(event, day, linesAdded, linesRemoved);
-		applyWeekly(event, day.with(DayOfWeek.MONDAY), linesAdded, linesRemoved);
-		applyMonthly(event, day.withDayOfMonth(1), linesAdded, linesRemoved);
-	}
-
-	private void applyDaily(UsageEvent e, LocalDate day, long linesAdded, long linesRemoved) {
-		DailyRollup rollup = dailyRollupRepository
-				.findByOrgIdAndTeamIdAndMemberIdAndProjectIdAndRollupDate(
-						e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(), day)
-				.orElseGet(() -> dailyRollupRepository.save(new DailyRollup(
-						e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(), day,
-						0, 0, BigDecimal.ZERO, 0, 0)));
-		rollup.accumulate(e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
+		dailyRollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
+				day, e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(), linesAdded, linesRemoved);
+		weeklyRollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
+				day.with(DayOfWeek.MONDAY), e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
 				linesAdded, linesRemoved);
-	}
-
-	private void applyWeekly(UsageEvent e, LocalDate weekStart, long linesAdded, long linesRemoved) {
-		WeeklyRollup rollup = weeklyRollupRepository
-				.findByOrgIdAndTeamIdAndMemberIdAndProjectIdAndWeekStart(
-						e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(), weekStart)
-				.orElseGet(() -> weeklyRollupRepository.save(new WeeklyRollup(
-						e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(), weekStart,
-						0, 0, BigDecimal.ZERO, 0, 0)));
-		rollup.accumulate(e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
-				linesAdded, linesRemoved);
-	}
-
-	private void applyMonthly(UsageEvent e, LocalDate monthStart, long linesAdded, long linesRemoved) {
-		MonthlyRollup rollup = monthlyRollupRepository
-				.findByOrgIdAndTeamIdAndMemberIdAndProjectIdAndMonthStart(
-						e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(), monthStart)
-				.orElseGet(() -> monthlyRollupRepository.save(new MonthlyRollup(
-						e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(), monthStart,
-						0, 0, BigDecimal.ZERO, 0, 0)));
-		rollup.accumulate(e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
+		monthlyRollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
+				day.withDayOfMonth(1), e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
 				linesAdded, linesRemoved);
 	}
 

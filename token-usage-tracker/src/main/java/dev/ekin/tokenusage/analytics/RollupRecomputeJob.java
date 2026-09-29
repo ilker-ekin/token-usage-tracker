@@ -2,6 +2,7 @@ package dev.ekin.tokenusage.analytics;
 
 import dev.ekin.tokenusage.usage.UsageEventRepository;
 import dev.ekin.tokenusage.usage.UsageEventRepository.UsageAggregate;
+import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,6 +19,13 @@ import java.util.Set;
  * Safety net for late-arriving events: every night the rollups covering the
  * last two days are dropped and rebuilt from usage_event, the source of
  * truth. Weeks and months touched by those days are rebuilt in full.
+ *
+ * <p>The rebuild takes a SHARE ROW EXCLUSIVE lock on the rollup tables. That
+ * mode conflicts with the ROW EXCLUSIVE lock every ingest upsert takes, so the
+ * job waits for in-flight ingests to commit and new ones queue behind it for
+ * the few seconds it runs. Without it an ingest could create a rollup row
+ * between the job's delete and re-insert, failing the job on the unique key.
+ * Dashboard reads (ACCESS SHARE) are not blocked.
  */
 @Component
 public class RollupRecomputeJob {
@@ -29,17 +37,20 @@ public class RollupRecomputeJob {
 	private final WeeklyRollupRepository weeklyRollupRepository;
 	private final MonthlyRollupRepository monthlyRollupRepository;
 	private final AnalyticsCacheService analyticsCacheService;
+	private final EntityManager entityManager;
 
 	public RollupRecomputeJob(UsageEventRepository usageEventRepository,
 			DailyRollupRepository dailyRollupRepository,
 			WeeklyRollupRepository weeklyRollupRepository,
 			MonthlyRollupRepository monthlyRollupRepository,
-			AnalyticsCacheService analyticsCacheService) {
+			AnalyticsCacheService analyticsCacheService,
+			EntityManager entityManager) {
 		this.usageEventRepository = usageEventRepository;
 		this.dailyRollupRepository = dailyRollupRepository;
 		this.weeklyRollupRepository = weeklyRollupRepository;
 		this.monthlyRollupRepository = monthlyRollupRepository;
 		this.analyticsCacheService = analyticsCacheService;
+		this.entityManager = entityManager;
 	}
 
 	@Scheduled(cron = "0 30 2 * * *", zone = "UTC")
@@ -50,6 +61,10 @@ public class RollupRecomputeJob {
 
 	@Transactional
 	public void recompute(LocalDate fromDay, LocalDate toDay) {
+		entityManager.createNativeQuery(
+				"lock table daily_rollup, weekly_rollup, monthly_rollup in share row exclusive mode")
+				.executeUpdate();
+
 		Set<LocalDate> weekStarts = new LinkedHashSet<>();
 		Set<LocalDate> monthStarts = new LinkedHashSet<>();
 

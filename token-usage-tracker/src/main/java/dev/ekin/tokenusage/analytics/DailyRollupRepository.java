@@ -8,13 +8,35 @@ import org.springframework.data.repository.query.Param;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 public interface DailyRollupRepository extends JpaRepository<DailyRollup, UUID> {
 
-	Optional<DailyRollup> findByOrgIdAndTeamIdAndMemberIdAndProjectIdAndRollupDate(
-			UUID orgId, UUID teamId, UUID memberId, UUID projectId, LocalDate rollupDate);
+	/**
+	 * Adds one event's numbers to its rollup row, creating the row if needed.
+	 * A single atomic statement, so concurrent ingests for the same key neither
+	 * collide on insert nor lose each other's increments.
+	 */
+	@Modifying
+	@Query(nativeQuery = true, value = """
+			insert into daily_rollup (id, org_id, team_id, member_id, project_id, rollup_date,
+			        total_input_tokens, total_output_tokens, total_cost_usd,
+			        total_lines_added, total_lines_removed)
+			values (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, :day,
+			        :inputTokens, :outputTokens, :costUsd, :linesAdded, :linesRemoved)
+			on conflict (org_id, team_id, member_id, project_id, rollup_date) do update set
+			    total_input_tokens  = daily_rollup.total_input_tokens  + excluded.total_input_tokens,
+			    total_output_tokens = daily_rollup.total_output_tokens + excluded.total_output_tokens,
+			    total_cost_usd      = daily_rollup.total_cost_usd      + excluded.total_cost_usd,
+			    total_lines_added   = daily_rollup.total_lines_added   + excluded.total_lines_added,
+			    total_lines_removed = daily_rollup.total_lines_removed + excluded.total_lines_removed
+			""")
+	void upsertAdd(@Param("orgId") UUID orgId, @Param("teamId") UUID teamId,
+			@Param("memberId") UUID memberId, @Param("projectId") UUID projectId,
+			@Param("day") LocalDate day,
+			@Param("inputTokens") long inputTokens, @Param("outputTokens") long outputTokens,
+			@Param("costUsd") BigDecimal costUsd,
+			@Param("linesAdded") long linesAdded, @Param("linesRemoved") long linesRemoved);
 
 	/** Bulk delete so the recompute job's re-inserts flush after it, not before. */
 	@Modifying

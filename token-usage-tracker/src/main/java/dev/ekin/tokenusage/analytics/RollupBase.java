@@ -60,13 +60,4 @@ public abstract class RollupBase extends BaseEntity {
 		this.totalLinesRemoved = totalLinesRemoved;
 	}
 
-	public void accumulate(long inputTokens, long outputTokens, BigDecimal costUsd,
-			long linesAdded, long linesRemoved) {
-		this.totalInputTokens += inputTokens;
-		this.totalOutputTokens += outputTokens;
-		this.totalCostUsd = this.totalCostUsd.add(costUsd);
-		this.totalLinesAdded += linesAdded;
-		this.totalLinesRemoved += linesRemoved;
-	}
-
 }

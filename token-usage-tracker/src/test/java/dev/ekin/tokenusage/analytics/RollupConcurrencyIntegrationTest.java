@@ -1,0 +1,259 @@
+package dev.ekin.tokenusage.analytics;
+
+import dev.ekin.tokenusage.TestcontainersConfiguration;
+import dev.ekin.tokenusage.pricing.ModelPricing;
+import dev.ekin.tokenusage.pricing.ModelPricingRepository;
+import dev.ekin.tokenusage.tenant.Member;
+import dev.ekin.tokenusage.tenant.MemberRepository;
+import dev.ekin.tokenusage.tenant.Organization;
+import dev.ekin.tokenusage.tenant.OrganizationRepository;
+import dev.ekin.tokenusage.tenant.Project;
+import dev.ekin.tokenusage.tenant.ProjectRepository;
+import dev.ekin.tokenusage.tenant.Team;
+import dev.ekin.tokenusage.tenant.TeamRepository;
+import dev.ekin.tokenusage.usage.UsageEvent;
+import dev.ekin.tokenusage.usage.UsageEventRepository;
+import dev.ekin.tokenusage.usage.UsageService;
+import dev.ekin.tokenusage.usage.UsageService.IngestCommand;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+
+import java.math.BigDecimal;
+import java.time.DayOfWeek;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Many ingests for the same (org, team, member, project, period) at once:
+ * every rollup must end up as exactly one row holding the exact sum. Covers
+ * members with and without a team, since team_id is nullable.
+ */
+@SpringBootTest
+@Import(TestcontainersConfiguration.class)
+class RollupConcurrencyIntegrationTest {
+
+	private static final int EVENTS = 50;
+	private static final Instant EVENT_TIME = Instant.parse("2026-06-15T10:30:00Z");
+	private static final LocalDate DAY = LocalDate.ofInstant(EVENT_TIME, ZoneOffset.UTC);
+
+	@Autowired
+	UsageService usageService;
+	@Autowired
+	RollupRecomputeJob rollupRecomputeJob;
+
+	@Autowired
+	OrganizationRepository organizationRepository;
+	@Autowired
+	TeamRepository teamRepository;
+	@Autowired
+	MemberRepository memberRepository;
+	@Autowired
+	ProjectRepository projectRepository;
+	@Autowired
+	ModelPricingRepository modelPricingRepository;
+	@Autowired
+	UsageEventRepository usageEventRepository;
+	@Autowired
+	DailyRollupRepository dailyRollupRepository;
+	@Autowired
+	WeeklyRollupRepository weeklyRollupRepository;
+	@Autowired
+	MonthlyRollupRepository monthlyRollupRepository;
+
+	Member teamMember;
+	Member teamlessMember;
+	Project project;
+
+	@BeforeEach
+	void setUp() {
+		dailyRollupRepository.deleteAll();
+		weeklyRollupRepository.deleteAll();
+		monthlyRollupRepository.deleteAll();
+		usageEventRepository.deleteAll();
+		modelPricingRepository.deleteAll();
+		memberRepository.deleteAll();
+		projectRepository.deleteAll();
+		teamRepository.deleteAll();
+		organizationRepository.deleteAll();
+
+		Organization org = organizationRepository.save(new Organization("Race Org", "race-org"));
+		Team team = teamRepository.save(new Team(org.getId(), "Racers"));
+		teamMember = memberRepository.save(new Member(org.getId(), team.getId(),
+				"racer@race.dev", "Racer", null, "MEMBER"));
+		teamlessMember = memberRepository.save(new Member(org.getId(), null,
+				"solo@race.dev", "Solo", null, "MEMBER"));
+		project = projectRepository.save(new Project(org.getId(), "race-project"));
+		// $3/M input, $15/M output: every event's cost is exact at scale 6
+		modelPricingRepository.save(new ModelPricing("claude-sonnet-4-6",
+				new BigDecimal("0.003"), new BigDecimal("0.015"),
+				Instant.parse("2026-01-01T00:00:00Z"), null));
+	}
+
+	@Test
+	void parallelIngestsForMemberWithTeamSumExactly() throws Exception {
+		ingestInParallel(teamMember);
+		assertRollupsHoldExactSum();
+	}
+
+	@Test
+	void parallelIngestsForMemberWithoutTeamSumExactly() throws Exception {
+		ingestInParallel(teamlessMember);
+		assertRollupsHoldExactSum();
+	}
+
+	@Test
+	void recomputeAfterParallelIngestsReproducesTheSameTotals() throws Exception {
+		ingestInParallel(teamMember);
+		ingestInParallel(teamlessMember);
+
+		rollupRecomputeJob.recompute(DAY, DAY);
+
+		assertThat(dailyRollupRepository.count()).isEqualTo(2);
+		assertThat(weeklyRollupRepository.count()).isEqualTo(2);
+		assertThat(monthlyRollupRepository.count()).isEqualTo(2);
+		for (DailyRollup r : dailyRollupRepository.findAll()) {
+			assertTotals(r);
+		}
+	}
+
+	/**
+	 * The nightly job deletes and rebuilds a day's rows while ingests keep
+	 * arriving. Each round books against a fresh project, so every rollup key
+	 * is new while the job runs: the case where the job's re-insert and an
+	 * ingest's upsert race to create the same row.
+	 */
+	@Test
+	void recomputeRunningDuringIngestsNeitherFailsNorLosesEvents() throws Exception {
+		int rounds = 10;
+		for (int round = 0; round < rounds; round++) {
+			Project fresh = projectRepository.save(new Project(project.getOrgId(), "p" + round));
+			List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+			CountDownLatch start = new CountDownLatch(1);
+			try (ExecutorService pool = Executors.newFixedThreadPool(EVENTS + 1)) {
+				pool.submit(() -> {
+					try {
+						start.await();
+						rollupRecomputeJob.recompute(DAY, DAY);
+					} catch (Throwable t) {
+						failures.add(t);
+					}
+				});
+				for (int i = 0; i < EVENTS; i++) {
+					int n = i;
+					Member member = n % 2 == 0 ? teamMember : teamlessMember;
+					pool.submit(() -> {
+						try {
+							start.await();
+							usageService.ingest(member.getId(), new IngestCommand(fresh.getId(),
+									"claude-sonnet-4-6", inputTokens(n), outputTokens(n), 1, 1, EVENT_TIME));
+						} catch (Throwable t) {
+							failures.add(t);
+						}
+					});
+				}
+				start.countDown();
+			}
+			assertThat(failures)
+					.as("round %d: %s", round, failures.stream().map(Throwable::toString).distinct().toList())
+					.isEmpty();
+		}
+
+		// Every committed event is reflected exactly once, in one row per key
+		long eventInput = usageEventRepository.findAll().stream()
+				.mapToLong(UsageEvent::getInputTokens).sum();
+		assertThat(dailyRollupRepository.count()).isEqualTo(2L * rounds);
+		assertThat(dailyRollupRepository.findAll().stream()
+				.mapToLong(RollupBase::getTotalInputTokens).sum()).isEqualTo(eventInput);
+		assertThat(monthlyRollupRepository.findAll().stream()
+				.mapToLong(RollupBase::getTotalInputTokens).sum()).isEqualTo(eventInput);
+	}
+
+	/** Fires all ingests at once behind a start gate; fails on any exception. */
+	private void ingestInParallel(Member member) throws Exception {
+		CountDownLatch ready = new CountDownLatch(EVENTS);
+		CountDownLatch start = new CountDownLatch(1);
+		List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+
+		try (ExecutorService pool = Executors.newFixedThreadPool(EVENTS)) {
+			for (int i = 0; i < EVENTS; i++) {
+				int n = i;
+				pool.submit(() -> {
+					ready.countDown();
+					try {
+						start.await();
+						usageService.ingest(member.getId(), new IngestCommand(project.getId(),
+								"claude-sonnet-4-6", inputTokens(n), outputTokens(n), 1, 1, EVENT_TIME));
+					} catch (Throwable t) {
+						failures.add(t);
+					}
+				});
+			}
+			ready.await(10, TimeUnit.SECONDS);
+			start.countDown();
+		}
+
+		assertThat(failures)
+				.as("%d of %d ingests threw: %s", failures.size(), EVENTS, failures.stream()
+						.map(t -> t.getClass().getSimpleName()).distinct().toList())
+				.isEmpty();
+	}
+
+	private void assertRollupsHoldExactSum() {
+		assertThat(usageEventRepository.count()).isEqualTo(EVENTS);
+
+		List<DailyRollup> daily = dailyRollupRepository.findAll();
+		assertThat(daily).hasSize(1);
+		assertThat(daily.getFirst().getRollupDate()).isEqualTo(DAY);
+		assertTotals(daily.getFirst());
+
+		List<WeeklyRollup> weekly = weeklyRollupRepository.findAll();
+		assertThat(weekly).hasSize(1);
+		assertThat(weekly.getFirst().getWeekStart()).isEqualTo(DAY.with(DayOfWeek.MONDAY));
+		assertTotals(weekly.getFirst());
+
+		List<MonthlyRollup> monthly = monthlyRollupRepository.findAll();
+		assertThat(monthly).hasSize(1);
+		assertThat(monthly.getFirst().getMonthStart()).isEqualTo(DAY.withDayOfMonth(1));
+		assertTotals(monthly.getFirst());
+	}
+
+	private static void assertTotals(RollupBase r) {
+		long expectedIn = 0;
+		long expectedOut = 0;
+		BigDecimal expectedCost = BigDecimal.ZERO;
+		for (int i = 0; i < EVENTS; i++) {
+			expectedIn += inputTokens(i);
+			expectedOut += outputTokens(i);
+			expectedCost = expectedCost.add(BigDecimal.valueOf(
+					inputTokens(i) * 3L + outputTokens(i) * 15L, 6));
+		}
+		assertThat(r.getTotalInputTokens()).isEqualTo(expectedIn);
+		assertThat(r.getTotalOutputTokens()).isEqualTo(expectedOut);
+		assertThat(r.getTotalCostUsd()).isEqualByComparingTo(expectedCost);
+		assertThat(r.getTotalLinesAdded()).isEqualTo(EVENTS);
+		assertThat(r.getTotalLinesRemoved()).isEqualTo(EVENTS);
+	}
+
+	/** Distinct per event so a lost update always shows up in the sum. */
+	private static int inputTokens(int i) {
+		return 1000 + i;
+	}
+
+	private static int outputTokens(int i) {
+		return 500 + 7 * i;
+	}
+
+}
