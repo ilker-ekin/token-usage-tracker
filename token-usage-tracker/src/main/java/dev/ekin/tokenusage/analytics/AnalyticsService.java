@@ -43,38 +43,33 @@ public class AnalyticsService {
 
 	@Transactional(readOnly = true)
 	public List<ProjectAnalytics> projects(UUID orgId, LocalDate from, LocalDate to) {
-		String key = AnalyticsCacheService.key(orgId, "projects", from, to);
-		return cache.getList(key, ProjectAnalytics[].class).orElseGet(() -> {
+		return cache.getOrLoad(orgId, "projects", from, to, ProjectAnalytics[].class, () -> {
 			List<ProjectAnalytics> result = dailyRollupRepository
 					.aggregateByProject(orgId, from, to).stream()
 					.map(a -> new ProjectAnalytics(a.getProjectId(), a.getName(),
 							a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
 							a.getLinesAdded(), a.getLinesRemoved()))
 					.toList();
-			cache.put(key, result);
 			return result;
 		});
 	}
 
 	@Transactional(readOnly = true)
 	public List<MemberAnalytics> members(UUID orgId, LocalDate from, LocalDate to) {
-		String key = AnalyticsCacheService.key(orgId, "members", from, to);
-		return cache.getList(key, MemberAnalytics[].class).orElseGet(() -> {
+		return cache.getOrLoad(orgId, "members", from, to, MemberAnalytics[].class, () -> {
 			List<MemberAnalytics> result = dailyRollupRepository
 					.aggregateByMember(orgId, from, to).stream()
 					.map(a -> new MemberAnalytics(a.getMemberId(), a.getDisplayName(), a.getEmail(),
 							a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
 							a.getLinesAdded(), a.getLinesRemoved()))
 					.toList();
-			cache.put(key, result);
 			return result;
 		});
 	}
 
 	@Transactional(readOnly = true)
 	public List<TeamAnalytics> teams(UUID orgId, LocalDate from, LocalDate to) {
-		String key = AnalyticsCacheService.key(orgId, "teams", from, to);
-		return cache.getList(key, TeamAnalytics[].class).orElseGet(() -> {
+		return cache.getOrLoad(orgId, "teams", from, to, TeamAnalytics[].class, () -> {
 			Map<UUID, Long> memberCounts = memberRepository.countByTeam(orgId).stream()
 					.collect(java.util.stream.Collectors.toMap(
 							MemberRepository.TeamMemberCount::getTeamId,
@@ -85,21 +80,18 @@ public class AnalyticsService {
 							memberCounts.getOrDefault(a.getTeamId(), 0L),
 							a.getInputTokens(), a.getOutputTokens(), a.getCostUsd()))
 					.toList();
-			cache.put(key, result);
 			return result;
 		});
 	}
 
 	@Transactional(readOnly = true)
 	public List<DailyAnalytics> daily(UUID orgId, LocalDate from, LocalDate to) {
-		String key = AnalyticsCacheService.key(orgId, "daily", from, to);
-		return cache.getList(key, DailyAnalytics[].class).orElseGet(() -> {
+		return cache.getOrLoad(orgId, "daily", from, to, DailyAnalytics[].class, () -> {
 			List<DailyAnalytics> result = dailyRollupRepository
 					.aggregateByDay(orgId, from, to).stream()
 					.map(a -> new DailyAnalytics(a.getDate(), a.getInputTokens(),
 							a.getOutputTokens(), a.getCostUsd()))
 					.toList();
-			cache.put(key, result);
 			return result;
 		});
 	}

@@ -23,9 +23,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,6 +55,10 @@ class AnalyticsIntegrationTest {
 	UsageService usageService;
 	@Autowired
 	StringRedisTemplate redisTemplate;
+	@Autowired
+	TransactionTemplate transactionTemplate;
+	@Autowired
+	RollupRecomputeJob rollupRecomputeJob;
 
 	@Autowired
 	OrganizationRepository organizationRepository;
@@ -235,7 +241,7 @@ class AnalyticsIntegrationTest {
 						.header("Authorization", "Bearer " + token))
 				.andExpect(status().isOk());
 
-		Set<String> keys = redisTemplate.keys("analytics:" + alice.getOrgId() + ":projects:*");
+		Set<String> keys = redisTemplate.keys("analytics:" + alice.getOrgId() + ":*:projects:*");
 		assertThat(keys).hasSize(1);
 
 		// Served from cache: DB changes are invisible until eviction
@@ -251,6 +257,48 @@ class AnalyticsIntegrationTest {
 						.header("Authorization", "Bearer " + token))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.length()").value(1));
+	}
+
+	@Test
+	void ingestBumpsOnlyItsOwnOrgsVersionAndOnlyAfterCommit() {
+		String orgVersion = AnalyticsCacheService.versionKey(alice.getOrgId());
+		String otherOrgVersion = AnalyticsCacheService.versionKey(otherOrgMember.getOrgId());
+		String before = redisTemplate.opsForValue().get(orgVersion);
+		String otherBefore = redisTemplate.opsForValue().get(otherOrgVersion);
+
+		// Rolled back: nothing changed, so nothing is invalidated
+		transactionTemplate.executeWithoutResult(tx -> {
+			ingest(alice, checkout, 1, 1);
+			tx.setRollbackOnly();
+		});
+		assertThat(redisTemplate.opsForValue().get(orgVersion)).isEqualTo(before);
+
+		// Committed: the bump waits for the commit, never runs before it
+		transactionTemplate.executeWithoutResult(tx -> {
+			ingest(alice, checkout, 1, 1);
+			assertThat(redisTemplate.opsForValue().get(orgVersion)).isEqualTo(before);
+		});
+		assertThat(Long.parseLong(redisTemplate.opsForValue().get(orgVersion)))
+				.isEqualTo(Long.parseLong(before) + 1);
+		assertThat(redisTemplate.opsForValue().get(otherOrgVersion)).isEqualTo(otherBefore);
+	}
+
+	@Test
+	void recomputeInvalidatesEveryOrgsCache() throws Exception {
+		mockMvc.perform(get("/analytics/projects?" + RANGE)
+						.header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(2));
+
+		rollupRecomputeJob.recompute(LocalDate.parse("2026-06-15"), LocalDate.parse("2026-06-15"));
+
+		// Empty the rollups behind the job's back: a read that still hit the
+		// cached two-project answer would prove the job did not invalidate it
+		dailyRollupRepository.deleteAll();
+		mockMvc.perform(get("/analytics/projects?" + RANGE)
+						.header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(0));
 	}
 
 	@Test
