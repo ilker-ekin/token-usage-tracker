@@ -72,18 +72,38 @@ public class PricingService {
 			return Optional.empty();
 		}
 		ModelPrice p = price.get();
-		log.info("Auto-created pricing for {} from LiteLLM catalog: in={}/1k out={}/1k",
-				p.model(), p.inputPricePer1k(), p.outputPricePer1k());
+		log.info("Auto-created pricing for {} from LiteLLM catalog: in={}/1k out={}/1k "
+						+ "cacheRead={}/1k cacheCreation={}/1k",
+				p.model(), p.inputPricePer1k(), p.outputPricePer1k(),
+				p.cacheReadPricePer1k(), p.cacheCreationPricePer1k());
 		return Optional.of(modelPricingRepository.save(new ModelPricing(
-				p.model(), p.inputPricePer1k(), p.outputPricePer1k(), Instant.EPOCH, null)));
+				p.model(), p.inputPricePer1k(), p.outputPricePer1k(),
+				p.cacheReadPricePer1k(), p.cacheCreationPricePer1k(), Instant.EPOCH, null)));
 	}
 
+	/** Cost of an event without prompt caching. */
 	public BigDecimal computeCost(ModelPricing pricing, int inputTokens, int outputTokens) {
-		BigDecimal inputCost = pricing.getInputPricePer1k()
-				.multiply(BigDecimal.valueOf(inputTokens));
-		BigDecimal outputCost = pricing.getOutputPricePer1k()
-				.multiply(BigDecimal.valueOf(outputTokens));
-		return inputCost.add(outputCost)
+		return computeCost(pricing, inputTokens, outputTokens, 0, 0);
+	}
+
+	/**
+	 * Sums the four token classes at their own prices and rounds once at the
+	 * end. {@code inputTokens} is uncached input only. A pricing row without a
+	 * cache price charges those tokens at the input price: that is what the
+	 * tracker booked before cache prices existed, and it never under-bills.
+	 */
+	public BigDecimal computeCost(ModelPricing pricing, int inputTokens, int outputTokens,
+			int cacheReadTokens, int cacheCreationTokens) {
+		BigDecimal inputPrice = pricing.getInputPricePer1k();
+		BigDecimal cacheReadPrice = pricing.getCacheReadPricePer1k() != null
+				? pricing.getCacheReadPricePer1k() : inputPrice;
+		BigDecimal cacheCreationPrice = pricing.getCacheCreationPricePer1k() != null
+				? pricing.getCacheCreationPricePer1k() : inputPrice;
+
+		return inputPrice.multiply(BigDecimal.valueOf(inputTokens))
+				.add(pricing.getOutputPricePer1k().multiply(BigDecimal.valueOf(outputTokens)))
+				.add(cacheReadPrice.multiply(BigDecimal.valueOf(cacheReadTokens)))
+				.add(cacheCreationPrice.multiply(BigDecimal.valueOf(cacheCreationTokens)))
 				.divide(ONE_THOUSAND, COST_SCALE, RoundingMode.HALF_UP);
 	}
 

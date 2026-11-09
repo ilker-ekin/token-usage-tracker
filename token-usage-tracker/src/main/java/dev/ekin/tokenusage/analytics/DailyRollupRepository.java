@@ -20,13 +20,17 @@ public interface DailyRollupRepository extends JpaRepository<DailyRollup, UUID> 
 	@Modifying
 	@Query(nativeQuery = true, value = """
 			insert into daily_rollup (id, org_id, team_id, member_id, project_id, rollup_date,
-			        total_input_tokens, total_output_tokens, total_cost_usd,
+			        total_input_tokens, total_output_tokens,
+			        total_cache_read_tokens, total_cache_creation_tokens, total_cost_usd,
 			        total_lines_added, total_lines_removed)
 			values (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, :day,
-			        :inputTokens, :outputTokens, :costUsd, :linesAdded, :linesRemoved)
+			        :inputTokens, :outputTokens, :cacheReadTokens, :cacheCreationTokens,
+			        :costUsd, :linesAdded, :linesRemoved)
 			on conflict (org_id, team_id, member_id, project_id, rollup_date) do update set
 			    total_input_tokens  = daily_rollup.total_input_tokens  + excluded.total_input_tokens,
 			    total_output_tokens = daily_rollup.total_output_tokens + excluded.total_output_tokens,
+			    total_cache_read_tokens     = daily_rollup.total_cache_read_tokens     + excluded.total_cache_read_tokens,
+			    total_cache_creation_tokens = daily_rollup.total_cache_creation_tokens + excluded.total_cache_creation_tokens,
 			    total_cost_usd      = daily_rollup.total_cost_usd      + excluded.total_cost_usd,
 			    total_lines_added   = daily_rollup.total_lines_added   + excluded.total_lines_added,
 			    total_lines_removed = daily_rollup.total_lines_removed + excluded.total_lines_removed
@@ -35,6 +39,8 @@ public interface DailyRollupRepository extends JpaRepository<DailyRollup, UUID> 
 			@Param("memberId") UUID memberId, @Param("projectId") UUID projectId,
 			@Param("day") LocalDate day,
 			@Param("inputTokens") long inputTokens, @Param("outputTokens") long outputTokens,
+			@Param("cacheReadTokens") long cacheReadTokens,
+			@Param("cacheCreationTokens") long cacheCreationTokens,
 			@Param("costUsd") BigDecimal costUsd,
 			@Param("linesAdded") long linesAdded, @Param("linesRemoved") long linesRemoved);
 

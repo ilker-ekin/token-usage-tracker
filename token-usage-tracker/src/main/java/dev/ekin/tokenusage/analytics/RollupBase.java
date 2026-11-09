@@ -37,6 +37,12 @@ public abstract class RollupBase extends BaseEntity {
 	@Column(name = "total_output_tokens", nullable = false)
 	private long totalOutputTokens;
 
+	@Column(name = "total_cache_read_tokens", nullable = false)
+	private long totalCacheReadTokens;
+
+	@Column(name = "total_cache_creation_tokens", nullable = false)
+	private long totalCacheCreationTokens;
+
 	@Column(name = "total_cost_usd", nullable = false)
 	private BigDecimal totalCostUsd;
 
@@ -47,7 +53,8 @@ public abstract class RollupBase extends BaseEntity {
 	private long totalLinesRemoved;
 
 	protected RollupBase(UUID orgId, UUID teamId, UUID memberId, UUID projectId,
-			long totalInputTokens, long totalOutputTokens, BigDecimal totalCostUsd,
+			long totalInputTokens, long totalOutputTokens,
+			long totalCacheReadTokens, long totalCacheCreationTokens, BigDecimal totalCostUsd,
 			long totalLinesAdded, long totalLinesRemoved) {
 		this.orgId = orgId;
 		this.teamId = teamId;
@@ -55,6 +62,8 @@ public abstract class RollupBase extends BaseEntity {
 		this.projectId = projectId;
 		this.totalInputTokens = totalInputTokens;
 		this.totalOutputTokens = totalOutputTokens;
+		this.totalCacheReadTokens = totalCacheReadTokens;
+		this.totalCacheCreationTokens = totalCacheCreationTokens;
 		this.totalCostUsd = totalCostUsd;
 		this.totalLinesAdded = totalLinesAdded;
 		this.totalLinesRemoved = totalLinesRemoved;

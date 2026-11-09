@@ -32,16 +32,20 @@ public class ModelPricingController {
 			@NotBlank String model,
 			@NotNull @DecimalMin("0") BigDecimal inputPricePer1k,
 			@NotNull @DecimalMin("0") BigDecimal outputPricePer1k,
+			@DecimalMin("0") BigDecimal cacheReadPricePer1k,
+			@DecimalMin("0") BigDecimal cacheCreationPricePer1k,
 			@NotNull Instant validFrom,
 			Instant validTo) {
 	}
 
 	public record PricingResponse(UUID id, String model, BigDecimal inputPricePer1k,
-			BigDecimal outputPricePer1k, Instant validFrom, Instant validTo) {
+			BigDecimal outputPricePer1k, BigDecimal cacheReadPricePer1k,
+			BigDecimal cacheCreationPricePer1k, Instant validFrom, Instant validTo) {
 
 		static PricingResponse from(ModelPricing p) {
 			return new PricingResponse(p.getId(), p.getModel(), p.getInputPricePer1k(),
-					p.getOutputPricePer1k(), p.getValidFrom(), p.getValidTo());
+					p.getOutputPricePer1k(), p.getCacheReadPricePer1k(),
+					p.getCacheCreationPricePer1k(), p.getValidFrom(), p.getValidTo());
 		}
 	}
 
@@ -50,7 +54,8 @@ public class ModelPricingController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public PricingResponse create(@RequestBody @Validated CreatePricingRequest request) {
 		ModelPricing pricing = new ModelPricing(request.model(), request.inputPricePer1k(),
-				request.outputPricePer1k(), request.validFrom(), request.validTo());
+				request.outputPricePer1k(), request.cacheReadPricePer1k(),
+				request.cacheCreationPricePer1k(), request.validFrom(), request.validTo());
 		return PricingResponse.from(modelPricingRepository.save(pricing));
 	}
 

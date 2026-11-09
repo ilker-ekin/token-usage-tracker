@@ -42,8 +42,19 @@ public class UsageService {
 		this.analyticsCacheService = analyticsCacheService;
 	}
 
+	/**
+	 * {@code inputTokens} is uncached input only. Cache reads and cache writes
+	 * are reported separately because providers bill them at their own rates.
+	 */
 	public record IngestCommand(UUID projectId, String model, int inputTokens, int outputTokens,
+			int cacheReadTokens, int cacheCreationTokens,
 			Integer linesAdded, Integer linesRemoved, Instant eventTime) {
+
+		/** An event without prompt caching. */
+		public IngestCommand(UUID projectId, String model, int inputTokens, int outputTokens,
+				Integer linesAdded, Integer linesRemoved, Instant eventTime) {
+			this(projectId, model, inputTokens, outputTokens, 0, 0, linesAdded, linesRemoved, eventTime);
+		}
 	}
 
 	/**
@@ -62,11 +73,13 @@ public class UsageService {
 
 		ModelPricing pricing = pricingService.findActivePricing(command.model(), command.eventTime());
 		BigDecimal cost = pricingService.computeCost(pricing,
-				command.inputTokens(), command.outputTokens());
+				command.inputTokens(), command.outputTokens(),
+				command.cacheReadTokens(), command.cacheCreationTokens());
 
 		UsageEvent event = usageEventRepository.save(new UsageEvent(
 				member.getOrgId(), member.getTeamId(), member.getId(), command.projectId(),
 				command.model(), command.inputTokens(), command.outputTokens(),
+				command.cacheReadTokens(), command.cacheCreationTokens(),
 				command.linesAdded(), command.linesRemoved(), cost, command.eventTime()));
 
 		rollupService.apply(event);

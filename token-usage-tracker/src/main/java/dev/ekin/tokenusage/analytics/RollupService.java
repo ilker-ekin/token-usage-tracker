@@ -43,13 +43,17 @@ public class RollupService {
 		long linesRemoved = e.getLinesRemoved() == null ? 0 : e.getLinesRemoved();
 
 		dailyRollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
-				day, e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(), linesAdded, linesRemoved);
+				day, e.getInputTokens(), e.getOutputTokens(),
+				e.getCacheReadTokens(), e.getCacheCreationTokens(),
+				e.getCostUsd(), linesAdded, linesRemoved);
 		weeklyRollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
-				day.with(DayOfWeek.MONDAY), e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
-				linesAdded, linesRemoved);
+				day.with(DayOfWeek.MONDAY), e.getInputTokens(), e.getOutputTokens(),
+				e.getCacheReadTokens(), e.getCacheCreationTokens(),
+				e.getCostUsd(), linesAdded, linesRemoved);
 		monthlyRollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
-				day.withDayOfMonth(1), e.getInputTokens(), e.getOutputTokens(), e.getCostUsd(),
-				linesAdded, linesRemoved);
+				day.withDayOfMonth(1), e.getInputTokens(), e.getOutputTokens(),
+				e.getCacheReadTokens(), e.getCacheCreationTokens(),
+				e.getCostUsd(), linesAdded, linesRemoved);
 	}
 
 }

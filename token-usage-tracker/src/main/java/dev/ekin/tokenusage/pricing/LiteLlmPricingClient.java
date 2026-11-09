@@ -25,7 +25,13 @@ public class LiteLlmPricingClient {
 
 	private final RestClient restClient = RestClient.create();
 
-	public record ModelPrice(String model, BigDecimal inputPricePer1k, BigDecimal outputPricePer1k) {
+	/** Cache prices are null when the catalog does not list them for the model. */
+	public record ModelPrice(String model, BigDecimal inputPricePer1k, BigDecimal outputPricePer1k,
+			BigDecimal cacheReadPricePer1k, BigDecimal cacheCreationPricePer1k) {
+
+		public ModelPrice(String model, BigDecimal inputPricePer1k, BigDecimal outputPricePer1k) {
+			this(model, inputPricePer1k, outputPricePer1k, null, null);
+		}
 	}
 
 	/**
@@ -42,11 +48,17 @@ public class LiteLlmPricingClient {
 			}
 			return Optional.of(new ModelPrice(model,
 					perTokenToPer1k(entry.get("input_cost_per_token").decimalValue()),
-					perTokenToPer1k(entry.get("output_cost_per_token").decimalValue())));
+					perTokenToPer1k(entry.get("output_cost_per_token").decimalValue()),
+					optionalPer1k(entry, "cache_read_input_token_cost"),
+					optionalPer1k(entry, "cache_creation_input_token_cost")));
 		} catch (Exception e) {
 			log.warn("Could not fetch LiteLLM pricing for {}: {}", model, e.getMessage());
 			return Optional.empty();
 		}
+	}
+
+	private static BigDecimal optionalPer1k(JsonNode entry, String field) {
+		return entry.hasNonNull(field) ? perTokenToPer1k(entry.get(field).decimalValue()) : null;
 	}
 
 	private static BigDecimal perTokenToPer1k(BigDecimal perToken) {

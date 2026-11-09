@@ -19,13 +19,17 @@ public interface WeeklyRollupRepository extends JpaRepository<WeeklyRollup, UUID
 	@Modifying
 	@Query(nativeQuery = true, value = """
 			insert into weekly_rollup (id, org_id, team_id, member_id, project_id, week_start,
-			        total_input_tokens, total_output_tokens, total_cost_usd,
+			        total_input_tokens, total_output_tokens,
+			        total_cache_read_tokens, total_cache_creation_tokens, total_cost_usd,
 			        total_lines_added, total_lines_removed)
 			values (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, :weekStart,
-			        :inputTokens, :outputTokens, :costUsd, :linesAdded, :linesRemoved)
+			        :inputTokens, :outputTokens, :cacheReadTokens, :cacheCreationTokens,
+			        :costUsd, :linesAdded, :linesRemoved)
 			on conflict (org_id, team_id, member_id, project_id, week_start) do update set
 			    total_input_tokens  = weekly_rollup.total_input_tokens  + excluded.total_input_tokens,
 			    total_output_tokens = weekly_rollup.total_output_tokens + excluded.total_output_tokens,
+			    total_cache_read_tokens     = weekly_rollup.total_cache_read_tokens     + excluded.total_cache_read_tokens,
+			    total_cache_creation_tokens = weekly_rollup.total_cache_creation_tokens + excluded.total_cache_creation_tokens,
 			    total_cost_usd      = weekly_rollup.total_cost_usd      + excluded.total_cost_usd,
 			    total_lines_added   = weekly_rollup.total_lines_added   + excluded.total_lines_added,
 			    total_lines_removed = weekly_rollup.total_lines_removed + excluded.total_lines_removed
@@ -34,6 +38,8 @@ public interface WeeklyRollupRepository extends JpaRepository<WeeklyRollup, UUID
 			@Param("memberId") UUID memberId, @Param("projectId") UUID projectId,
 			@Param("weekStart") LocalDate weekStart,
 			@Param("inputTokens") long inputTokens, @Param("outputTokens") long outputTokens,
+			@Param("cacheReadTokens") long cacheReadTokens,
+			@Param("cacheCreationTokens") long cacheCreationTokens,
 			@Param("costUsd") BigDecimal costUsd,
 			@Param("linesAdded") long linesAdded, @Param("linesRemoved") long linesRemoved);
 

@@ -9,6 +9,9 @@
  *  2. Dollar side: for each model, make one small real call, compute the
  *     expected cost from usage × the tracker's own pricing rows, ingest the
  *     event, and assert the tracker booked the same figure.
+ *  3. Cache side (--live only): send the same cacheable system prompt
+ *     twice. The first call must report a cache write, the second a cache
+ *     read, and the tracker must book both at the cache prices.
  *
  * Usage:
  *   npm run verify            # count_tokens layer only (no spend)
@@ -27,11 +30,35 @@ const MODELS = (process.env.VERIFY_MODELS ?? "claude-opus-4-8,claude-sonnet-4-6,
 // then equal count_tokens for the identical messages array.
 const MESSAGES = [{ role: "user", content: "Reply with the single word: pong" }];
 
-// Matches PricingService: (in × inPrice + out × outPrice) / 1000, 6 dp.
-// Float64 is exact enough at these magnitudes; assert with 1e-6 tolerance
-// to absorb HALF_UP edge cases.
-const expectedCost = (p, input, output) =>
-  (input * p.inputPricePer1k + output * p.outputPricePer1k) / 1000;
+// Matches PricingService: the four token classes at their own per-1k
+// prices, summed, / 1000, 6 dp. A pricing row without a cache price charges
+// those tokens at the input price. Float64 is exact enough at these
+// magnitudes; assert with 1e-6 tolerance to absorb HALF_UP edge cases.
+const expectedCost = (p, t) =>
+  (t.inputTokens * p.inputPricePer1k +
+    t.outputTokens * p.outputPricePer1k +
+    t.cacheReadTokens * (p.cacheReadPricePer1k ?? p.inputPricePer1k) +
+    t.cacheCreationTokens * (p.cacheCreationPricePer1k ?? p.inputPricePer1k)) / 1000;
+
+const tokensOf = (usage) => ({
+  inputTokens: usage.input_tokens,
+  outputTokens: usage.output_tokens,
+  cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+  cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
+});
+
+// The largest minimum cacheable prefix of any current model is 4096 tokens;
+// a shorter prompt is silently not cached. The filler is far above that, and
+// the run nonce in front makes the first call of every run a cache write
+// rather than a hit on an entry left by an earlier run.
+const CACHE_MIN_TOKENS = 4096;
+const cacheSystem = () => [{
+  type: "text",
+  text: `verify-costs run ${crypto.randomUUID()}\n` +
+    "The tracker books uncached input, output, cache reads and cache writes separately. "
+      .repeat(600),
+  cache_control: { type: "ephemeral" },
+}];
 
 const client = new Anthropic();
 let failures = 0;
@@ -47,20 +74,38 @@ for (const model of MODELS) {
   if (!LIVE) continue;
 
   const resp = await client.messages.create({ model, max_tokens: 64, messages: MESSAGES });
-  const { input_tokens: input, output_tokens: output } = resp.usage;
+  const tokens = tokensOf(resp.usage);
 
-  check(`${model} input tokens: usage(${input}) == count_tokens(${counted})`,
-      input === counted);
+  check(`${model} input tokens: usage(${tokens.inputTokens}) == count_tokens(${counted})`,
+      tokens.inputTokens === counted);
 
   const p = pricing[model];
   if (!p) {
     check(`${model} has a tracker pricing row`, false);
     continue;
   }
-  const expected = expectedCost(p, input, output);
-  const booked = await ingest(trackerToken, model, input, output);
-  check(`${model} cost: booked $${booked} ≈ expected $${expected.toFixed(6)}`,
-      Math.abs(booked - expected) < 1e-6);
+  await reconcile(model, "cost", p, tokens);
+
+  // Cache layer: identical request twice, strictly one after the other (an
+  // entry is only readable once the response that wrote it has started).
+  const system = cacheSystem();
+  const systemTokens = (await client.messages.countTokens({ model, system, messages: MESSAGES }))
+    .input_tokens;
+  if (systemTokens <= CACHE_MIN_TOKENS) {
+    check(`${model} cache prompt is long enough to cache (${systemTokens} tokens)`, false);
+    continue;
+  }
+  const write = tokensOf((await client.messages.create(
+      { model, max_tokens: 64, system, messages: MESSAGES })).usage);
+  check(`${model} first call wrote the cache (cache_creation=${write.cacheCreationTokens})`,
+      write.cacheCreationTokens > 0);
+  await reconcile(model, "cache-write cost", p, write);
+
+  const read = tokensOf((await client.messages.create(
+      { model, max_tokens: 64, system, messages: MESSAGES })).usage);
+  check(`${model} second call read the cache (cache_read=${read.cacheReadTokens})`,
+      read.cacheReadTokens > 0);
+  await reconcile(model, "cache-read cost", p, read);
 }
 
 if (failures > 0) {
@@ -69,6 +114,14 @@ if (failures > 0) {
 }
 console.log(LIVE ? "\nAll checks passed — calculator matches the API."
                  : "\nToken counts printed. Re-run with --live to reconcile dollars.");
+
+/** Ingests the event and asserts the tracker booked what the formula expects. */
+async function reconcile(model, label, p, tokens) {
+  const expected = expectedCost(p, tokens);
+  const booked = await ingest(trackerToken, model, tokens);
+  check(`${model} ${label}: booked $${booked} ≈ expected $${expected.toFixed(6)}`,
+      Math.abs(booked - expected) < 1e-6);
+}
 
 function check(label, ok) {
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}`);
@@ -96,15 +149,14 @@ async function fetchPricing(token) {
   return Object.fromEntries((await res.json()).map((p) => [p.model, p]));
 }
 
-async function ingest(token, model, inputTokens, outputTokens) {
+async function ingest(token, model, tokens) {
   const res = await fetch(`${TRACKER_URL}/usage`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       projectId: process.env.TRACKER_PROJECT_ID,
       model,
-      inputTokens,
-      outputTokens,
+      ...tokens,
       eventTime: new Date().toISOString(),
     }),
   });

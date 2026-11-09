@@ -26,17 +26,34 @@ public class ModelPricing extends BaseEntity {
 	@Column(name = "output_price_per_1k", nullable = false)
 	private BigDecimal outputPricePer1k;
 
+	/** Null when no cache-read price is known; cost then uses the input price. */
+	@Column(name = "cache_read_price_per_1k")
+	private BigDecimal cacheReadPricePer1k;
+
+	/** Null when no cache-write price is known; cost then uses the input price. */
+	@Column(name = "cache_creation_price_per_1k")
+	private BigDecimal cacheCreationPricePer1k;
+
 	@Column(name = "valid_from", nullable = false)
 	private Instant validFrom;
 
 	@Column(name = "valid_to")
 	private Instant validTo;
 
+	/** Pricing without cache prices: cache tokens are charged at the input price. */
 	public ModelPricing(String model, BigDecimal inputPricePer1k, BigDecimal outputPricePer1k,
+			Instant validFrom, Instant validTo) {
+		this(model, inputPricePer1k, outputPricePer1k, null, null, validFrom, validTo);
+	}
+
+	public ModelPricing(String model, BigDecimal inputPricePer1k, BigDecimal outputPricePer1k,
+			BigDecimal cacheReadPricePer1k, BigDecimal cacheCreationPricePer1k,
 			Instant validFrom, Instant validTo) {
 		this.model = model;
 		this.inputPricePer1k = inputPricePer1k;
 		this.outputPricePer1k = outputPricePer1k;
+		this.cacheReadPricePer1k = cacheReadPricePer1k;
+		this.cacheCreationPricePer1k = cacheCreationPricePer1k;
 		this.validFrom = validFrom;
 		this.validTo = validTo;
 	}
