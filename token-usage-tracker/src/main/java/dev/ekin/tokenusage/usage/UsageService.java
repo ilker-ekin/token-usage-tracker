@@ -14,6 +14,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -30,11 +31,16 @@ public class UsageService {
 	private final PricingService pricingService;
 	private final RollupService rollupService;
 	private final AnalyticsCacheService analyticsCacheService;
+	private final TransactionTemplate transactionTemplate;
+	private final IngestProperties ingestProperties;
 
 	public UsageService(UsageEventRepository usageEventRepository,
 			MemberRepository memberRepository, ProjectRepository projectRepository,
 			PricingService pricingService,
-			RollupService rollupService, AnalyticsCacheService analyticsCacheService) {
+			RollupService rollupService, AnalyticsCacheService analyticsCacheService,
+			TransactionTemplate transactionTemplate, IngestProperties ingestProperties) {
+		this.transactionTemplate = transactionTemplate;
+		this.ingestProperties = ingestProperties;
 		this.usageEventRepository = usageEventRepository;
 		this.memberRepository = memberRepository;
 		this.projectRepository = projectRepository;
@@ -46,15 +52,37 @@ public class UsageService {
 	/**
 	 * {@code inputTokens} is uncached input only. Cache reads and cache writes
 	 * are reported separately because providers bill them at their own rates.
+	 *
+	 * <p>The constructor rejects values no event can have, so callers that do
+	 * not come through the HTTP layer (seeder, jobs, tests) cannot book them
+	 * either.
 	 */
 	public record IngestCommand(UUID projectId, String model, int inputTokens, int outputTokens,
 			int cacheReadTokens, int cacheCreationTokens,
 			Integer linesAdded, Integer linesRemoved, Instant eventTime) {
 
+		public IngestCommand {
+			if (projectId == null || model == null || model.isBlank() || eventTime == null) {
+				throw new InvalidUsageEventException("projectId, model and eventTime are required");
+			}
+			requireNotNegative("inputTokens", inputTokens);
+			requireNotNegative("outputTokens", outputTokens);
+			requireNotNegative("cacheReadTokens", cacheReadTokens);
+			requireNotNegative("cacheCreationTokens", cacheCreationTokens);
+			requireNotNegative("linesAdded", linesAdded == null ? 0 : linesAdded);
+			requireNotNegative("linesRemoved", linesRemoved == null ? 0 : linesRemoved);
+		}
+
 		/** An event without prompt caching. */
 		public IngestCommand(UUID projectId, String model, int inputTokens, int outputTokens,
 				Integer linesAdded, Integer linesRemoved, Instant eventTime) {
 			this(projectId, model, inputTokens, outputTokens, 0, 0, linesAdded, linesRemoved, eventTime);
+		}
+
+		private static void requireNotNegative(String field, int value) {
+			if (value < 0) {
+				throw new InvalidUsageEventException(field + " must not be negative");
+			}
 		}
 	}
 
@@ -66,32 +94,35 @@ public class UsageService {
 	}
 
 	/** Ingests an event without an idempotency key: every call books a new event. */
-	@Transactional
 	public UsageEvent ingest(UUID memberId, IngestCommand command) {
 		return ingest(memberId, command, null).event();
 	}
 
 	/**
-	 * Persists the event with its cost snapshotted at ingest time and updates
-	 * all three rollups in the same transaction. Cached analytics for the org
-	 * are evicted so the dashboard reflects the write within one request.
-	 * The project must belong to the member's org; a foreign project is
-	 * reported exactly like a missing one.
+	 * Books the event with its cost snapshotted at ingest time. The event and
+	 * all three rollups commit in one transaction, and cached analytics for
+	 * the org are evicted so the dashboard reflects the write within one
+	 * request. The project must belong to the member's org; a foreign project
+	 * is reported exactly like a missing one.
+	 *
+	 * <p>This method itself is not transactional. Pricing is resolved first,
+	 * because for an unknown model that means a call to an external catalog,
+	 * and no database transaction may be open while it runs. Only the writes
+	 * that follow share a transaction.
 	 *
 	 * <p>With an {@code idempotencyKey}, a key the org has already used
 	 * returns the event booked the first time and changes nothing: no new
 	 * event, no rollup increment, no cache eviction. The command of a replay
 	 * is not compared with the original.
 	 */
-	@Transactional
 	public IngestResult ingest(UUID memberId, IngestCommand command, String idempotencyKey) {
 		Member member = memberRepository.findById(memberId)
 				.orElseThrow(() -> new NoSuchElementException("Member not found: " + memberId));
 		projectRepository.findByIdAndOrgId(command.projectId(), member.getOrgId())
 				.orElseThrow(() -> new ProjectNotFoundException(command.projectId()));
 
-		// Checked before pricing, so a replay succeeds even if the model's
-		// price has been removed since the first attempt.
+		// Checked before validation and pricing, so a replay succeeds even if
+		// the event has aged out or the model's price has been removed since.
 		if (idempotencyKey != null) {
 			Optional<UsageEvent> existing = usageEventRepository
 					.findByOrgIdAndIdempotencyKey(member.getOrgId(), idempotencyKey);
@@ -100,11 +131,30 @@ public class UsageService {
 			}
 		}
 
+		requireEventTimeInWindow(command.eventTime());
+
 		ModelPricing pricing = pricingService.findActivePricing(command.model(), command.eventTime());
 		BigDecimal cost = pricingService.computeCost(pricing,
 				command.inputTokens(), command.outputTokens(),
 				command.cacheReadTokens(), command.cacheCreationTokens());
 
+		return transactionTemplate.execute(status -> book(member, command, cost, idempotencyKey));
+	}
+
+	private void requireEventTimeInWindow(Instant eventTime) {
+		Instant now = Instant.now();
+		if (eventTime.isAfter(now.plus(ingestProperties.maxFuture()))) {
+			throw new InvalidUsageEventException("eventTime is in the future");
+		}
+		if (eventTime.isBefore(now.minus(ingestProperties.maxEventAge()))) {
+			throw new InvalidUsageEventException("eventTime is older than the accepted "
+					+ ingestProperties.maxEventAge().toDays() + " days");
+		}
+	}
+
+	/** Runs inside the ingest transaction: event, rollups and eviction are atomic. */
+	private IngestResult book(Member member, IngestCommand command, BigDecimal cost,
+			String idempotencyKey) {
 		UsageEvent event;
 		if (idempotencyKey == null) {
 			event = usageEventRepository.save(new UsageEvent(
@@ -122,7 +172,7 @@ public class UsageService {
 					idempotencyKey);
 			if (inserted == 0) {
 				// A concurrent request with the same key committed between the
-				// check above and this insert; its event is visible now.
+				// check in ingest and this insert; its event is visible now.
 				return new IngestResult(usageEventRepository
 						.findByOrgIdAndIdempotencyKey(member.getOrgId(), idempotencyKey)
 						.orElseThrow(), false);

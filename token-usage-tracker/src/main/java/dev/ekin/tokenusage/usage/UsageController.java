@@ -3,9 +3,11 @@ package dev.ekin.tokenusage.usage;
 import dev.ekin.tokenusage.auth.MemberPrincipal;
 import dev.ekin.tokenusage.usage.UsageService.IngestCommand;
 import dev.ekin.tokenusage.usage.UsageService.IngestResult;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -36,19 +38,25 @@ public class UsageController {
 		this.usageService = usageService;
 	}
 
+	/** Far above any single model call; one event beyond it is a client bug. */
+	static final long MAX_TOKENS = 100_000_000;
+	static final long MAX_LINES = 10_000_000;
+	/** Width of usage_event.model. */
+	static final int MAX_MODEL_LENGTH = 100;
+
 	/**
 	 * {@code inputTokens} is uncached input only. The optional cache fields
 	 * default to 0, so clients that do not use prompt caching are unaffected.
 	 */
 	public record UsageEventRequest(
 			@NotNull UUID projectId,
-			@NotBlank String model,
-			@PositiveOrZero int inputTokens,
-			@PositiveOrZero int outputTokens,
-			@PositiveOrZero Integer cacheReadTokens,
-			@PositiveOrZero Integer cacheCreationTokens,
-			@PositiveOrZero Integer linesAdded,
-			@PositiveOrZero Integer linesRemoved,
+			@NotBlank @Size(max = MAX_MODEL_LENGTH) String model,
+			@PositiveOrZero @Max(MAX_TOKENS) int inputTokens,
+			@PositiveOrZero @Max(MAX_TOKENS) int outputTokens,
+			@PositiveOrZero @Max(MAX_TOKENS) Integer cacheReadTokens,
+			@PositiveOrZero @Max(MAX_TOKENS) Integer cacheCreationTokens,
+			@PositiveOrZero @Max(MAX_LINES) Integer linesAdded,
+			@PositiveOrZero @Max(MAX_LINES) Integer linesRemoved,
 			@NotNull Instant eventTime) {
 	}
 
