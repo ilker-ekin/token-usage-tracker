@@ -33,11 +33,17 @@ public class UsageController {
 		this.usageService = usageService;
 	}
 
+	/**
+	 * {@code inputTokens} is uncached input only. The optional cache fields
+	 * default to 0, so clients that do not use prompt caching are unaffected.
+	 */
 	public record UsageEventRequest(
 			@NotNull UUID projectId,
 			@NotBlank String model,
 			@PositiveOrZero int inputTokens,
 			@PositiveOrZero int outputTokens,
+			@PositiveOrZero Integer cacheReadTokens,
+			@PositiveOrZero Integer cacheCreationTokens,
 			@PositiveOrZero Integer linesAdded,
 			@PositiveOrZero Integer linesRemoved,
 			@NotNull Instant eventTime) {
@@ -52,19 +58,26 @@ public class UsageController {
 			@RequestBody @Validated UsageEventRequest request) {
 		UsageEvent event = usageService.ingest(principal.memberId(), new IngestCommand(
 				request.projectId(), request.model(), request.inputTokens(), request.outputTokens(),
+				orZero(request.cacheReadTokens()), orZero(request.cacheCreationTokens()),
 				request.linesAdded(), request.linesRemoved(), request.eventTime()));
 		return new UsageEventResponse(event.getId(), event.getCostUsd());
 	}
 
 	public record UsageEventDetail(UUID id, UUID memberId, UUID teamId, UUID projectId,
-			String model, int inputTokens, int outputTokens, Integer linesAdded,
+			String model, int inputTokens, int outputTokens, int cacheReadTokens,
+			int cacheCreationTokens, Integer linesAdded,
 			Integer linesRemoved, BigDecimal costUsd, Instant eventTime) {
 
 		static UsageEventDetail from(UsageEvent e) {
 			return new UsageEventDetail(e.getId(), e.getMemberId(), e.getTeamId(), e.getProjectId(),
-					e.getModel(), e.getInputTokens(), e.getOutputTokens(), e.getLinesAdded(),
+					e.getModel(), e.getInputTokens(), e.getOutputTokens(), e.getCacheReadTokens(),
+					e.getCacheCreationTokens(), e.getLinesAdded(),
 					e.getLinesRemoved(), e.getCostUsd(), e.getEventTime());
 		}
+	}
+
+	private static int orZero(Integer value) {
+		return value == null ? 0 : value;
 	}
 
 	public record PageResponse<T>(List<T> content, int page, int size,

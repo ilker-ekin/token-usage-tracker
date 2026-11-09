@@ -22,9 +22,11 @@ public class MonthlyRollup extends RollupBase {
 	private LocalDate monthStart;
 
 	public MonthlyRollup(UUID orgId, UUID teamId, UUID memberId, UUID projectId, LocalDate monthStart,
-			long totalInputTokens, long totalOutputTokens, BigDecimal totalCostUsd,
+			long totalInputTokens, long totalOutputTokens,
+			long totalCacheReadTokens, long totalCacheCreationTokens, BigDecimal totalCostUsd,
 			long totalLinesAdded, long totalLinesRemoved) {
-		super(orgId, teamId, memberId, projectId, totalInputTokens, totalOutputTokens, totalCostUsd,
+		super(orgId, teamId, memberId, projectId, totalInputTokens, totalOutputTokens,
+				totalCacheReadTokens, totalCacheCreationTokens, totalCostUsd,
 				totalLinesAdded, totalLinesRemoved);
 		this.monthStart = monthStart;
 	}

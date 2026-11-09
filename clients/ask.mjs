@@ -70,20 +70,24 @@ async function turn(messages) {
   const message = await stream.finalMessage();
   process.stdout.write("\n");
 
-  // Cache reads/writes are billed at different rates, but they are all
-  // tokens the model processed — the tracker prices at the flat input
-  // rate, so this slightly overstates cost on cache-heavy sessions.
+  // usage.input_tokens is uncached input only. Cache reads and writes are
+  // billed at their own rates, so they are reported as separate fields and
+  // the tracker prices each class on its own.
   const usage = message.usage;
-  const inputTokens =
-    usage.input_tokens +
-    (usage.cache_creation_input_tokens ?? 0) +
-    (usage.cache_read_input_tokens ?? 0);
+  const tokens = {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
+  };
 
   try {
-    const cost = await reportUsage(message.model, inputTokens, usage.output_tokens);
+    const cost = await reportUsage(message.model, tokens);
     sessionCost += cost;
     console.error(
-      `[usage] in=${inputTokens} out=${usage.output_tokens} cost=$${cost.toFixed(6)}` +
+      `[usage] in=${tokens.inputTokens} out=${tokens.outputTokens}` +
+      ` cache_read=${tokens.cacheReadTokens} cache_write=${tokens.cacheCreationTokens}` +
+      ` cost=$${cost.toFixed(6)}` +
       (sessionCost !== cost ? ` session=$${sessionCost.toFixed(6)}` : ""),
     );
   } catch (e) {
@@ -123,7 +127,7 @@ async function chat() {
   console.error(`\nSession total booked: $${sessionCost.toFixed(6)}`);
 }
 
-async function reportUsage(usedModel, input, output) {
+async function reportUsage(usedModel, tokens) {
   const { TRACKER_EMAIL, TRACKER_PASSWORD, TRACKER_PROJECT_ID } = process.env;
   if (!TRACKER_EMAIL || !TRACKER_PASSWORD || !TRACKER_PROJECT_ID) {
     throw new Error("TRACKER_EMAIL / TRACKER_PASSWORD / TRACKER_PROJECT_ID not set");
@@ -148,14 +152,13 @@ async function reportUsage(usedModel, input, output) {
     body: JSON.stringify({
       projectId: TRACKER_PROJECT_ID,
       model: usedModel,
-      inputTokens: input,
-      outputTokens: output,
+      ...tokens,
       eventTime: new Date().toISOString(),
     }),
   });
   if (ingestRes.status === 401) {
     trackerToken = null; // token expired mid-session; retry once fresh
-    return reportUsage(usedModel, input, output);
+    return reportUsage(usedModel, tokens);
   }
   if (!ingestRes.ok) throw new Error(`ingest failed: ${ingestRes.status}`);
   return Number((await ingestRes.json()).costUsd);

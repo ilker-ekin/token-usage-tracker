@@ -192,6 +192,120 @@ class UsageIngestionIntegrationTest {
 		assertThat(monthly.getTotalCostUsd()).isEqualByComparingTo("0.033");
 	}
 
+	String cacheIngestJson() {
+		return ingestJson().replace("\"outputTokens\": 2000,",
+				"\"outputTokens\": 2000, \"cacheReadTokens\": 10000, \"cacheCreationTokens\": 4000,");
+	}
+
+	@Test
+	void ingestWithCacheTokensPricesThemSeparatelyAndRollsThemUp() throws Exception {
+		modelPricingRepository.deleteAll();
+		// Cache read 0.1x and cache write 1.25x of the $3/M input price
+		modelPricingRepository.save(new ModelPricing("claude-sonnet-4-6",
+				new BigDecimal("0.003"), new BigDecimal("0.015"),
+				new BigDecimal("0.0003"), new BigDecimal("0.00375"),
+				Instant.parse("2026-01-01T00:00:00Z"), null));
+		String token = obtainToken();
+
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + token)
+						.contentType("application/json")
+						.content(cacheIngestJson()))
+				.andExpect(status().isCreated())
+				// 0.033 + (10000 * 0.0003 + 4000 * 0.00375) / 1000 = 0.033 + 0.003 + 0.015
+				.andExpect(jsonPath("$.costUsd").value(0.051));
+
+		UsageEvent event = usageEventRepository.findAll().getFirst();
+		assertThat(event.getInputTokens()).isEqualTo(1000);
+		assertThat(event.getCacheReadTokens()).isEqualTo(10_000);
+		assertThat(event.getCacheCreationTokens()).isEqualTo(4000);
+
+		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		assertThat(daily.getTotalInputTokens()).isEqualTo(1000);
+		assertThat(daily.getTotalCacheReadTokens()).isEqualTo(10_000);
+		assertThat(daily.getTotalCacheCreationTokens()).isEqualTo(4000);
+		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.051");
+
+		WeeklyRollup weekly = weeklyRollupRepository.findAll().getFirst();
+		assertThat(weekly.getTotalCacheReadTokens()).isEqualTo(10_000);
+		assertThat(weekly.getTotalCacheCreationTokens()).isEqualTo(4000);
+
+		MonthlyRollup monthly = monthlyRollupRepository.findAll().getFirst();
+		assertThat(monthly.getTotalCacheReadTokens()).isEqualTo(10_000);
+		assertThat(monthly.getTotalCacheCreationTokens()).isEqualTo(4000);
+
+		mockMvc.perform(get("/usage").header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content[0].cacheReadTokens").value(10_000))
+				.andExpect(jsonPath("$.content[0].cacheCreationTokens").value(4000));
+
+		// The nightly rebuild reproduces the cache totals from the events
+		dailyRollupRepository.deleteAll();
+		LocalDate day = LocalDate.ofInstant(EVENT_TIME, ZoneOffset.UTC);
+		rollupRecomputeJob.recompute(day, day);
+		DailyRollup rebuilt = dailyRollupRepository.findAll().getFirst();
+		assertThat(rebuilt.getTotalCacheReadTokens()).isEqualTo(10_000);
+		assertThat(rebuilt.getTotalCacheCreationTokens()).isEqualTo(4000);
+		assertThat(rebuilt.getTotalCostUsd()).isEqualByComparingTo("0.051");
+	}
+
+	/** A pricing row from before cache prices existed has NULL in both columns. */
+	@Test
+	void cacheTokensAreChargedAtTheInputPriceWhenThePricingRowHasNoCachePrices() throws Exception {
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(cacheIngestJson()))
+				.andExpect(status().isCreated())
+				// 0.033 + (10000 + 4000) * 0.003 / 1000 = 0.033 + 0.042
+				.andExpect(jsonPath("$.costUsd").value(0.075));
+	}
+
+	@Test
+	void ingestWithoutCacheFieldsStoresZeroCacheTokens() throws Exception {
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(ingestJson()))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.costUsd").value(0.033));
+
+		UsageEvent event = usageEventRepository.findAll().getFirst();
+		assertThat(event.getCacheReadTokens()).isZero();
+		assertThat(event.getCacheCreationTokens()).isZero();
+		assertThat(dailyRollupRepository.findAll().getFirst().getTotalCacheReadTokens()).isZero();
+	}
+
+	@Test
+	void negativeCacheTokensAreRejected() throws Exception {
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(cacheIngestJson().replace("10000", "-1")))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void pricingEndpointAcceptsAndReturnsCachePrices() throws Exception {
+		String token = obtainToken();
+		mockMvc.perform(post("/model-pricing")
+						.header("Authorization", "Bearer " + token)
+						.contentType("application/json")
+						.content("""
+								{
+								  "model": "gpt-4o-mini",
+								  "inputPricePer1k": 0.00015,
+								  "outputPricePer1k": 0.0006,
+								  "cacheReadPricePer1k": 0.0000375,
+								  "validFrom": "2026-01-01T00:00:00Z"
+								}
+								"""))
+				.andExpect(status().isCreated())
+				// Seven decimals survive the round trip through NUMERIC(18,10)
+				.andExpect(jsonPath("$.cacheReadPricePer1k").value(0.0000375))
+				.andExpect(jsonPath("$.cacheCreationPricePer1k").doesNotExist());
+	}
+
 	@Test
 	void secondEventSameDayAccumulatesIntoExistingRollups() throws Exception {
 		String token = obtainToken();

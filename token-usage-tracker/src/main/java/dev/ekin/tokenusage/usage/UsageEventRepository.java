@@ -20,6 +20,8 @@ public interface UsageEventRepository
 		UUID getProjectId();
 		long getInputTokens();
 		long getOutputTokens();
+		long getCacheReadTokens();
+		long getCacheCreationTokens();
 		BigDecimal getCostUsd();
 		long getLinesAdded();
 		long getLinesRemoved();
@@ -28,6 +30,8 @@ public interface UsageEventRepository
 	@Query("""
 			select e.orgId as orgId, e.teamId as teamId, e.memberId as memberId, e.projectId as projectId,
 			       sum(e.inputTokens) as inputTokens, sum(e.outputTokens) as outputTokens,
+			       sum(e.cacheReadTokens) as cacheReadTokens,
+			       sum(e.cacheCreationTokens) as cacheCreationTokens,
 			       sum(e.costUsd) as costUsd,
 			       sum(coalesce(e.linesAdded, 0)) as linesAdded,
 			       sum(coalesce(e.linesRemoved, 0)) as linesRemoved

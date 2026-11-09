@@ -86,7 +86,8 @@ public class RollupRecomputeJob {
 		for (UsageAggregate a : aggregate(day, day.plusDays(1))) {
 			dailyRollupRepository.save(new DailyRollup(
 					a.getOrgId(), a.getTeamId(), a.getMemberId(), a.getProjectId(), day,
-					a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
+					a.getInputTokens(), a.getOutputTokens(),
+					a.getCacheReadTokens(), a.getCacheCreationTokens(), a.getCostUsd(),
 					a.getLinesAdded(), a.getLinesRemoved()));
 		}
 	}
@@ -96,7 +97,8 @@ public class RollupRecomputeJob {
 		for (UsageAggregate a : aggregate(weekStart, weekStart.plusWeeks(1))) {
 			weeklyRollupRepository.save(new WeeklyRollup(
 					a.getOrgId(), a.getTeamId(), a.getMemberId(), a.getProjectId(), weekStart,
-					a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
+					a.getInputTokens(), a.getOutputTokens(),
+					a.getCacheReadTokens(), a.getCacheCreationTokens(), a.getCostUsd(),
 					a.getLinesAdded(), a.getLinesRemoved()));
 		}
 	}
@@ -106,7 +108,8 @@ public class RollupRecomputeJob {
 		for (UsageAggregate a : aggregate(monthStart, monthStart.plusMonths(1))) {
 			monthlyRollupRepository.save(new MonthlyRollup(
 					a.getOrgId(), a.getTeamId(), a.getMemberId(), a.getProjectId(), monthStart,
-					a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
+					a.getInputTokens(), a.getOutputTokens(),
+					a.getCacheReadTokens(), a.getCacheCreationTokens(), a.getCostUsd(),
 					a.getLinesAdded(), a.getLinesRemoved()));
 		}
 	}

@@ -96,9 +96,11 @@ class RollupConcurrencyIntegrationTest {
 		teamlessMember = memberRepository.save(new Member(org.getId(), null,
 				"solo@race.dev", "Solo", null, "MEMBER"));
 		project = projectRepository.save(new Project(org.getId(), "race-project"));
-		// $3/M input, $15/M output: every event's cost is exact at scale 6
+		// $3/M input, $15/M output, $0.30/M cache read, $3.75/M cache write:
+		// every event's cost is exact at scale 6
 		modelPricingRepository.save(new ModelPricing("claude-sonnet-4-6",
 				new BigDecimal("0.003"), new BigDecimal("0.015"),
+				new BigDecimal("0.0003"), new BigDecimal("0.00375"),
 				Instant.parse("2026-01-01T00:00:00Z"), null));
 	}
 
@@ -158,7 +160,8 @@ class RollupConcurrencyIntegrationTest {
 						try {
 							start.await();
 							usageService.ingest(member.getId(), new IngestCommand(fresh.getId(),
-									"claude-sonnet-4-6", inputTokens(n), outputTokens(n), 1, 1, EVENT_TIME));
+									"claude-sonnet-4-6", inputTokens(n), outputTokens(n),
+									cacheReadTokens(n), cacheCreationTokens(n), 1, 1, EVENT_TIME));
 						} catch (Throwable t) {
 							failures.add(t);
 						}
@@ -195,7 +198,8 @@ class RollupConcurrencyIntegrationTest {
 					try {
 						start.await();
 						usageService.ingest(member.getId(), new IngestCommand(project.getId(),
-								"claude-sonnet-4-6", inputTokens(n), outputTokens(n), 1, 1, EVENT_TIME));
+								"claude-sonnet-4-6", inputTokens(n), outputTokens(n),
+								cacheReadTokens(n), cacheCreationTokens(n), 1, 1, EVENT_TIME));
 					} catch (Throwable t) {
 						failures.add(t);
 					}
@@ -233,15 +237,23 @@ class RollupConcurrencyIntegrationTest {
 	private static void assertTotals(RollupBase r) {
 		long expectedIn = 0;
 		long expectedOut = 0;
+		long expectedCacheRead = 0;
+		long expectedCacheCreation = 0;
 		BigDecimal expectedCost = BigDecimal.ZERO;
 		for (int i = 0; i < EVENTS; i++) {
 			expectedIn += inputTokens(i);
 			expectedOut += outputTokens(i);
+			expectedCacheRead += cacheReadTokens(i);
+			expectedCacheCreation += cacheCreationTokens(i);
+			// Micro-dollars per event: in*3 + out*15 + read*0.3 + write*3.75
 			expectedCost = expectedCost.add(BigDecimal.valueOf(
-					inputTokens(i) * 3L + outputTokens(i) * 15L, 6));
+					inputTokens(i) * 3L + outputTokens(i) * 15L
+							+ cacheReadTokens(i) * 3L / 10 + cacheCreationTokens(i) * 15L / 4, 6));
 		}
 		assertThat(r.getTotalInputTokens()).isEqualTo(expectedIn);
 		assertThat(r.getTotalOutputTokens()).isEqualTo(expectedOut);
+		assertThat(r.getTotalCacheReadTokens()).isEqualTo(expectedCacheRead);
+		assertThat(r.getTotalCacheCreationTokens()).isEqualTo(expectedCacheCreation);
 		assertThat(r.getTotalCostUsd()).isEqualByComparingTo(expectedCost);
 		assertThat(r.getTotalLinesAdded()).isEqualTo(EVENTS);
 		assertThat(r.getTotalLinesRemoved()).isEqualTo(EVENTS);
@@ -254,6 +266,16 @@ class RollupConcurrencyIntegrationTest {
 
 	private static int outputTokens(int i) {
 		return 500 + 7 * i;
+	}
+
+	/** Multiples of 10 so the $0.30/M read price yields whole micro-dollars. */
+	private static int cacheReadTokens(int i) {
+		return 200 + 10 * i;
+	}
+
+	/** Multiples of 4 so the $3.75/M write price yields whole micro-dollars. */
+	private static int cacheCreationTokens(int i) {
+		return 100 + 4 * i;
 	}
 
 }

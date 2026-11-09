@@ -83,7 +83,7 @@ All endpoints require a `Authorization: Bearer <token>` header except login and 
 |---|---|
 | `POST /auth/token` | Log in — returns a JWT |
 | `GET /auth/me` | Who am I (from the token) |
-| `POST /usage` | Report a usage event (tokens in/out, model, project) |
+| `POST /usage` | Report a usage event (tokens in/out, cache tokens, model, project) |
 | `GET /usage` | Browse raw events, filterable and paginated |
 | `GET /analytics/projects` | Spend per project for a date range |
 | `GET /analytics/members` | Spend per member (top spenders first) |
@@ -100,6 +100,15 @@ curl -X POST http://localhost:8080/usage \
   -H "Content-Type: application/json" \
   -d '{"projectId":"<uuid>","model":"claude-opus-4-8","inputTokens":1200,"outputTokens":450,"eventTime":"2026-07-07T12:00:00Z"}'
 ```
+
+`inputTokens` is uncached input only. Prompt-cache usage goes in the optional `cacheReadTokens` and `cacheCreationTokens` fields (default 0), which are priced at the model's cache rates:
+
+| Provider | `inputTokens` | `cacheReadTokens` | `cacheCreationTokens` |
+|---|---|---|---|
+| Anthropic | `usage.input_tokens` | `usage.cache_read_input_tokens` | `usage.cache_creation_input_tokens` |
+| OpenAI | `prompt_tokens - prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cached_tokens` | not billed, send 0 |
+
+OpenAI's `prompt_tokens` already includes cached tokens, so subtract them or they are charged twice. `POST /model-pricing` takes optional `cacheReadPricePer1k` and `cacheCreationPricePer1k`. A pricing row without them charges cache tokens at the input price.
 
 Model prices are seeded from [LiteLLM's public catalog](https://github.com/BerriAI/litellm); unknown models are priced from the same catalog automatically on first use.
 
@@ -132,6 +141,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 ## Limitations / next steps
 
+- **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
 - **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
 - **Ingest isn't idempotent.** A client that retries after a timeout books the event twice. The next step is an optional `Idempotency-Key` header, stored with the event under a unique constraint.
 - **`/analytics/teams` omits team-less spend.** The query inner-joins `team`, so members without a team are missing from that view (they're still in the other views).
