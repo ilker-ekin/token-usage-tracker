@@ -60,6 +60,10 @@ public class UsageEvent extends BaseEntity {
 	@Column(name = "event_time", nullable = false)
 	private Instant eventTime;
 
+	/** Client-supplied retry key, unique per org; null when the client sent none. */
+	@Column(name = "idempotency_key")
+	private String idempotencyKey;
+
 	public UsageEvent(UUID orgId, UUID teamId, UUID memberId, UUID projectId, String model,
 			int inputTokens, int outputTokens, int cacheReadTokens, int cacheCreationTokens,
 			Integer linesAdded, Integer linesRemoved, BigDecimal costUsd, Instant eventTime) {
