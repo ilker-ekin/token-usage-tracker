@@ -127,7 +127,7 @@ async function chat() {
   console.error(`\nSession total booked: $${sessionCost.toFixed(6)}`);
 }
 
-async function reportUsage(usedModel, tokens) {
+async function reportUsage(usedModel, tokens, idempotencyKey = crypto.randomUUID()) {
   const { TRACKER_EMAIL, TRACKER_PASSWORD, TRACKER_PROJECT_ID } = process.env;
   if (!TRACKER_EMAIL || !TRACKER_PASSWORD || !TRACKER_PROJECT_ID) {
     throw new Error("TRACKER_EMAIL / TRACKER_PASSWORD / TRACKER_PROJECT_ID not set");
@@ -148,6 +148,8 @@ async function reportUsage(usedModel, tokens) {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${trackerToken}`,
+      // Same key on the retry below, so a turn is never booked twice.
+      "Idempotency-Key": idempotencyKey,
     },
     body: JSON.stringify({
       projectId: TRACKER_PROJECT_ID,
@@ -158,7 +160,7 @@ async function reportUsage(usedModel, tokens) {
   });
   if (ingestRes.status === 401) {
     trackerToken = null; // token expired mid-session; retry once fresh
-    return reportUsage(usedModel, tokens);
+    return reportUsage(usedModel, tokens, idempotencyKey);
   }
   if (!ingestRes.ok) throw new Error(`ingest failed: ${ingestRes.status}`);
   return Number((await ingestRes.json()).costUsd);

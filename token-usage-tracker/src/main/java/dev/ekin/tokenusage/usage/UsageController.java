@@ -2,21 +2,24 @@ package dev.ekin.tokenusage.usage;
 
 import dev.ekin.tokenusage.auth.MemberPrincipal;
 import dev.ekin.tokenusage.usage.UsageService.IngestCommand;
+import dev.ekin.tokenusage.usage.UsageService.IngestResult;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -52,15 +55,29 @@ public class UsageController {
 	public record UsageEventResponse(UUID id, BigDecimal costUsd) {
 	}
 
+	static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+	static final int IDEMPOTENCY_KEY_MAX_LENGTH = 255;
+
+	/**
+	 * 201 for a new event. With an {@code Idempotency-Key} the org has already
+	 * used, 200 and the event booked the first time; nothing is booked again.
+	 */
 	@PostMapping
-	@ResponseStatus(HttpStatus.CREATED)
-	public UsageEventResponse ingest(@AuthenticationPrincipal MemberPrincipal principal,
+	public ResponseEntity<UsageEventResponse> ingest(@AuthenticationPrincipal MemberPrincipal principal,
+			@RequestHeader(value = IDEMPOTENCY_KEY_HEADER, required = false) String idempotencyKey,
 			@RequestBody @Validated UsageEventRequest request) {
-		UsageEvent event = usageService.ingest(principal.memberId(), new IngestCommand(
+		if (idempotencyKey != null && (idempotencyKey.isBlank()
+				|| idempotencyKey.length() > IDEMPOTENCY_KEY_MAX_LENGTH)) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+					IDEMPOTENCY_KEY_HEADER + " must be 1 to " + IDEMPOTENCY_KEY_MAX_LENGTH + " characters");
+		}
+		IngestResult result = usageService.ingest(principal.memberId(), new IngestCommand(
 				request.projectId(), request.model(), request.inputTokens(), request.outputTokens(),
 				orZero(request.cacheReadTokens()), orZero(request.cacheCreationTokens()),
-				request.linesAdded(), request.linesRemoved(), request.eventTime()));
-		return new UsageEventResponse(event.getId(), event.getCostUsd());
+				request.linesAdded(), request.linesRemoved(), request.eventTime()), idempotencyKey);
+		UsageEvent event = result.event();
+		return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
+				.body(new UsageEventResponse(event.getId(), event.getCostUsd()));
 	}
 
 	public record UsageEventDetail(UUID id, UUID memberId, UUID teamId, UUID projectId,

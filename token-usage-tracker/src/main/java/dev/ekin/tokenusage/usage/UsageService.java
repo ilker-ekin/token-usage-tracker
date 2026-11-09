@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -58,33 +59,80 @@ public class UsageService {
 	}
 
 	/**
+	 * @param created false when the idempotency key had already been used in
+	 *                the org and {@code event} is the one booked back then
+	 */
+	public record IngestResult(UsageEvent event, boolean created) {
+	}
+
+	/** Ingests an event without an idempotency key: every call books a new event. */
+	@Transactional
+	public UsageEvent ingest(UUID memberId, IngestCommand command) {
+		return ingest(memberId, command, null).event();
+	}
+
+	/**
 	 * Persists the event with its cost snapshotted at ingest time and updates
 	 * all three rollups in the same transaction. Cached analytics for the org
 	 * are evicted so the dashboard reflects the write within one request.
 	 * The project must belong to the member's org; a foreign project is
 	 * reported exactly like a missing one.
+	 *
+	 * <p>With an {@code idempotencyKey}, a key the org has already used
+	 * returns the event booked the first time and changes nothing: no new
+	 * event, no rollup increment, no cache eviction. The command of a replay
+	 * is not compared with the original.
 	 */
 	@Transactional
-	public UsageEvent ingest(UUID memberId, IngestCommand command) {
+	public IngestResult ingest(UUID memberId, IngestCommand command, String idempotencyKey) {
 		Member member = memberRepository.findById(memberId)
 				.orElseThrow(() -> new NoSuchElementException("Member not found: " + memberId));
 		projectRepository.findByIdAndOrgId(command.projectId(), member.getOrgId())
 				.orElseThrow(() -> new ProjectNotFoundException(command.projectId()));
+
+		// Checked before pricing, so a replay succeeds even if the model's
+		// price has been removed since the first attempt.
+		if (idempotencyKey != null) {
+			Optional<UsageEvent> existing = usageEventRepository
+					.findByOrgIdAndIdempotencyKey(member.getOrgId(), idempotencyKey);
+			if (existing.isPresent()) {
+				return new IngestResult(existing.get(), false);
+			}
+		}
 
 		ModelPricing pricing = pricingService.findActivePricing(command.model(), command.eventTime());
 		BigDecimal cost = pricingService.computeCost(pricing,
 				command.inputTokens(), command.outputTokens(),
 				command.cacheReadTokens(), command.cacheCreationTokens());
 
-		UsageEvent event = usageEventRepository.save(new UsageEvent(
-				member.getOrgId(), member.getTeamId(), member.getId(), command.projectId(),
-				command.model(), command.inputTokens(), command.outputTokens(),
-				command.cacheReadTokens(), command.cacheCreationTokens(),
-				command.linesAdded(), command.linesRemoved(), cost, command.eventTime()));
+		UsageEvent event;
+		if (idempotencyKey == null) {
+			event = usageEventRepository.save(new UsageEvent(
+					member.getOrgId(), member.getTeamId(), member.getId(), command.projectId(),
+					command.model(), command.inputTokens(), command.outputTokens(),
+					command.cacheReadTokens(), command.cacheCreationTokens(),
+					command.linesAdded(), command.linesRemoved(), cost, command.eventTime()));
+		} else {
+			UUID id = UUID.randomUUID();
+			int inserted = usageEventRepository.insertIfKeyAbsent(id,
+					member.getOrgId(), member.getTeamId(), member.getId(), command.projectId(),
+					command.model(), command.inputTokens(), command.outputTokens(),
+					command.cacheReadTokens(), command.cacheCreationTokens(),
+					command.linesAdded(), command.linesRemoved(), cost, command.eventTime(),
+					idempotencyKey);
+			if (inserted == 0) {
+				// A concurrent request with the same key committed between the
+				// check above and this insert; its event is visible now.
+				return new IngestResult(usageEventRepository
+						.findByOrgIdAndIdempotencyKey(member.getOrgId(), idempotencyKey)
+						.orElseThrow(), false);
+			}
+			event = usageEventRepository.findById(id).orElseThrow();
+		}
 
 		rollupService.apply(event);
 		analyticsCacheService.evictOrg(member.getOrgId());
-		return event;
+		return new IngestResult(event, true);
 	}
 
 	@Transactional(readOnly = true)
