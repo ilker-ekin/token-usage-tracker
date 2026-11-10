@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { login, setToken } from "../api";
+import { login } from "../api";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -12,8 +12,7 @@ export default function Login() {
     e.preventDefault();
     setError("");
     try {
-      const res = await login(email, password);
-      setToken(res.token);
+      await login(email, password);
       navigate("/");
     } catch {
       setError("Invalid email or password.");

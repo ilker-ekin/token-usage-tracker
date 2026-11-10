@@ -41,6 +41,8 @@ services:
       DB_PASSWORD: tut
       REDIS_HOST: redis
       JWT_SECRET: docker-compose-demo-only-secret-0123456789abcdef
+      # The demo is served over plain http on localhost:3000
+      AUTH_COOKIE_SECURE: "false"
     ports:
       - "8080:8080"
     depends_on:

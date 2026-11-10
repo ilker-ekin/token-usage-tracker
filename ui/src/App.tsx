@@ -1,5 +1,6 @@
+import { useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { getToken } from "./api";
+import { fetchMe } from "./api";
 import { DateRangeProvider } from "./dateRange";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
@@ -9,8 +10,20 @@ import Members from "./pages/Members";
 import Projects from "./pages/Projects";
 import Teams from "./pages/Teams";
 
+/** The session cookie is httpOnly, so the only way to know it is valid is to ask. */
 function RequireAuth({ children }: { children: JSX.Element }) {
-  return getToken() ? children : <Navigate to="/login" replace />;
+  const [state, setState] = useState<"checking" | "in" | "out">("checking");
+  useEffect(() => {
+    let active = true;
+    fetchMe()
+      .then(() => active && setState("in"))
+      .catch(() => active && setState("out"));
+    return () => {
+      active = false;
+    };
+  }, []);
+  if (state === "checking") return null;
+  return state === "in" ? children : <Navigate to="/login" replace />;
 }
 
 export default function App() {

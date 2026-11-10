@@ -1,16 +1,14 @@
-const TOKEN_KEY = "tut.jwt";
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+// The session lives in an httpOnly cookie set by POST /auth/token, so no
+// script on this page can read the token. Earlier builds kept it in
+// localStorage; drop that copy if one is left behind.
+try {
+  localStorage.removeItem("tut.jwt");
+} catch {
+  // storage unavailable: nothing to clean up
 }
 
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
+/** Sent on every request. The API requires it on cookie-authenticated writes (CSRF). */
+const CSRF_HEADERS = { "X-Requested-With": "XMLHttpRequest" };
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -18,24 +16,28 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  { redirectOn401 = true }: { redirectOn401?: boolean } = {},
+): Promise<T> {
   const res = await fetch(path, {
     ...init,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...CSRF_HEADERS,
       ...init?.headers,
     },
   });
   if (res.status === 401) {
-    clearToken();
-    window.location.href = "/login";
+    if (redirectOn401) window.location.href = "/login";
     throw new ApiError(401, "Session expired");
   }
   if (!res.ok) {
     throw new ApiError(res.status, `Request failed: ${res.status}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -89,14 +91,21 @@ export interface DailyAnalytics {
   costUsd: number;
 }
 
-export async function login(email: string, password: string): Promise<TokenResponse> {
-  return request<TokenResponse>("/auth/token", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
+/** Sets the session cookie; the token in the body is not kept. */
+export async function login(email: string, password: string): Promise<void> {
+  await request<TokenResponse>(
+    "/auth/token",
+    { method: "POST", body: JSON.stringify({ email, password }) },
+    { redirectOn401: false },
+  );
 }
 
-export const fetchMe = () => request<Me>("/auth/me");
+export async function logout(): Promise<void> {
+  await request<void>("/auth/logout", { method: "POST" }, { redirectOn401: false });
+}
+
+/** The current member, or a 401 ApiError when there is no valid session. */
+export const fetchMe = () => request<Me>("/auth/me", undefined, { redirectOn401: false });
 
 const range = (from: string, to: string) => `from=${from}&to=${to}`;
 

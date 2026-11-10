@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { clearToken } from "../api";
+import { logout as endSession } from "../api";
 import { useDateRange } from "../dateRange";
 
 const TITLES: Record<string, string> = {
@@ -16,8 +16,9 @@ export default function Layout() {
   const { pathname } = useLocation();
 
   function logout() {
-    clearToken();
-    navigate("/login");
+    endSession()
+      .catch(() => undefined)
+      .finally(() => navigate("/login"));
   }
 
   return (
