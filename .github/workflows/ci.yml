@@ -3,6 +3,16 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Also on main itself, so a direct push or a merge is tested and main
+  # carries its own status.
+  push:
+    branches: [main]
+
+# A newer push to the same pull request makes the older run pointless.
+# Runs on main are never cancelled, so every commit there gets a result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:

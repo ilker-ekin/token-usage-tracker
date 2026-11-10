@@ -10,6 +10,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
@@ -19,6 +20,40 @@ class SecurityFilterChainTest {
 
     @Autowired
     MockMvc mockMvc;
+
+    /**
+     * The token endpoint is public, so it is the one place an attacker can
+     * guess passwords without credentials. After five failures for one email
+     * it must answer 429, not keep evaluating guesses.
+     */
+    @Test
+    void tokenEndpoint_locksOutAfterRepeatedFailures() throws Exception {
+        String body = "{\"email\": \"lockout-probe@test.dev\", \"password\": \"guess\"}";
+        try {
+            for (int i = 0; i < 5; i++) {
+                mockMvc.perform(post("/auth/token").with(fromProbeAddress())
+                                .contentType("application/json").content(body))
+                        .andExpect(status().isUnauthorized());
+            }
+            mockMvc.perform(post("/auth/token").with(fromProbeAddress())
+                            .contentType("application/json").content(body))
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(header().exists("Retry-After"));
+        } finally {
+            redisTemplate.delete(java.util.List.of(
+                    "login:fail:email:lockout-probe@test.dev", "login:fail:ip:203.0.113.254"));
+        }
+    }
+
+    private static org.springframework.test.web.servlet.request.RequestPostProcessor fromProbeAddress() {
+        return request -> {
+            request.setRemoteAddr("203.0.113.254");
+            return request;
+        };
+    }
+
+    @Autowired
+    org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     /**
      * Health must be reachable without any credentials.

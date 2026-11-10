@@ -128,6 +128,8 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 **The read-through cache is evicted by version.** Analytics responses are cached for 5 minutes under keys that embed a per-org version and a global generation. An ingest invalidates its org with one `INCR` after commit, and the nightly job invalidates every org by bumping the generation. There is no `KEYS`/`SCAN`, and a read racing a write can't re-cache stale totals: the reader resolves the version before it queries. If Redis is down, the cache becomes a pass-through and no request fails.
 
+**Login is rate limited in Redis.** `POST /auth/token` counts failed logins per email (5) and per client address (20) in a 15-minute window, then answers `429` with `Retry-After`; a successful login clears the email's counter. If Redis is down the limit is skipped rather than blocking every login. An unknown email costs the same bcrypt comparison as a wrong password, so response time doesn't reveal which emails have an account. The client address is taken from `X-Forwarded-For` only when the request comes from a private-network proxy such as the bundled nginx.
+
 **Tenant isolation comes from the token.** The org always comes from the JWT (or from the member row on ingest), never from request parameters. Every query is filtered by it. Ingest rejects a project from another org with the same 404 as an unknown project, so tenants can't probe each other's ids. Tests cover each endpoint against a second org's data.
 
 ## Limitations / next steps
