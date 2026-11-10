@@ -1,13 +1,10 @@
 package dev.ekin.tokenusage.usage;
 
 import dev.ekin.tokenusage.TestcontainersConfiguration;
-import dev.ekin.tokenusage.analytics.DailyRollup;
-import dev.ekin.tokenusage.analytics.DailyRollupRepository;
-import dev.ekin.tokenusage.analytics.MonthlyRollup;
-import dev.ekin.tokenusage.analytics.MonthlyRollupRepository;
+import dev.ekin.tokenusage.analytics.Granularity;
+import dev.ekin.tokenusage.analytics.Rollup;
+import dev.ekin.tokenusage.analytics.RollupRepository;
 import dev.ekin.tokenusage.analytics.RollupRecomputeJob;
-import dev.ekin.tokenusage.analytics.WeeklyRollup;
-import dev.ekin.tokenusage.analytics.WeeklyRollupRepository;
 import dev.ekin.tokenusage.pricing.ModelPricing;
 import dev.ekin.tokenusage.pricing.ModelPricingRepository;
 import dev.ekin.tokenusage.pricing.PricingCatalogUnavailableException;
@@ -77,11 +74,7 @@ class UsageIngestionIntegrationTest {
 	@Autowired
 	UsageEventRepository usageEventRepository;
 	@Autowired
-	DailyRollupRepository dailyRollupRepository;
-	@Autowired
-	WeeklyRollupRepository weeklyRollupRepository;
-	@Autowired
-	MonthlyRollupRepository monthlyRollupRepository;
+	RollupRepository rollupRepository;
 	@Autowired
 	RollupRecomputeJob rollupRecomputeJob;
 	@Autowired
@@ -96,9 +89,7 @@ class UsageIngestionIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
-		dailyRollupRepository.deleteAll();
-		weeklyRollupRepository.deleteAll();
-		monthlyRollupRepository.deleteAll();
+		rollupRepository.deleteAll();
 		usageEventRepository.deleteAll();
 		modelPricingRepository.deleteAll();
 		memberRepository.deleteAll();
@@ -184,20 +175,20 @@ class UsageIngestionIntegrationTest {
 
 		LocalDate day = LocalDate.ofInstant(EVENT_TIME, ZoneOffset.UTC);
 
-		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
-		assertThat(daily.getRollupDate()).isEqualTo(day);
+		Rollup daily = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
+		assertThat(daily.getPeriodStart()).isEqualTo(day);
 		assertThat(daily.getTotalInputTokens()).isEqualTo(1000);
 		assertThat(daily.getTotalOutputTokens()).isEqualTo(2000);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.033");
 		assertThat(daily.getTotalLinesAdded()).isEqualTo(42);
 		assertThat(daily.getTotalLinesRemoved()).isEqualTo(7);
 
-		WeeklyRollup weekly = weeklyRollupRepository.findAll().getFirst();
-		assertThat(weekly.getWeekStart()).isEqualTo(day.with(DayOfWeek.MONDAY));
+		Rollup weekly = rollupRepository.findByGranularity(Granularity.WEEK).getFirst();
+		assertThat(weekly.getPeriodStart()).isEqualTo(day.with(DayOfWeek.MONDAY));
 		assertThat(weekly.getTotalCostUsd()).isEqualByComparingTo("0.033");
 
-		MonthlyRollup monthly = monthlyRollupRepository.findAll().getFirst();
-		assertThat(monthly.getMonthStart()).isEqualTo(day.withDayOfMonth(1));
+		Rollup monthly = rollupRepository.findByGranularity(Granularity.MONTH).getFirst();
+		assertThat(monthly.getPeriodStart()).isEqualTo(day.withDayOfMonth(1));
 		assertThat(monthly.getTotalCostUsd()).isEqualByComparingTo("0.033");
 	}
 
@@ -229,17 +220,17 @@ class UsageIngestionIntegrationTest {
 		assertThat(event.getCacheReadTokens()).isEqualTo(10_000);
 		assertThat(event.getCacheCreationTokens()).isEqualTo(4000);
 
-		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		Rollup daily = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
 		assertThat(daily.getTotalInputTokens()).isEqualTo(1000);
 		assertThat(daily.getTotalCacheReadTokens()).isEqualTo(10_000);
 		assertThat(daily.getTotalCacheCreationTokens()).isEqualTo(4000);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.051");
 
-		WeeklyRollup weekly = weeklyRollupRepository.findAll().getFirst();
+		Rollup weekly = rollupRepository.findByGranularity(Granularity.WEEK).getFirst();
 		assertThat(weekly.getTotalCacheReadTokens()).isEqualTo(10_000);
 		assertThat(weekly.getTotalCacheCreationTokens()).isEqualTo(4000);
 
-		MonthlyRollup monthly = monthlyRollupRepository.findAll().getFirst();
+		Rollup monthly = rollupRepository.findByGranularity(Granularity.MONTH).getFirst();
 		assertThat(monthly.getTotalCacheReadTokens()).isEqualTo(10_000);
 		assertThat(monthly.getTotalCacheCreationTokens()).isEqualTo(4000);
 
@@ -249,10 +240,10 @@ class UsageIngestionIntegrationTest {
 				.andExpect(jsonPath("$.content[0].cacheCreationTokens").value(4000));
 
 		// The nightly rebuild reproduces the cache totals from the events
-		dailyRollupRepository.deleteAll();
+		rollupRepository.deleteByGranularity(Granularity.DAY);
 		LocalDate day = LocalDate.ofInstant(EVENT_TIME, ZoneOffset.UTC);
 		rollupRecomputeJob.recompute(day, day);
-		DailyRollup rebuilt = dailyRollupRepository.findAll().getFirst();
+		Rollup rebuilt = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
 		assertThat(rebuilt.getTotalCacheReadTokens()).isEqualTo(10_000);
 		assertThat(rebuilt.getTotalCacheCreationTokens()).isEqualTo(4000);
 		assertThat(rebuilt.getTotalCostUsd()).isEqualByComparingTo("0.051");
@@ -282,7 +273,7 @@ class UsageIngestionIntegrationTest {
 		UsageEvent event = usageEventRepository.findAll().getFirst();
 		assertThat(event.getCacheReadTokens()).isZero();
 		assertThat(event.getCacheCreationTokens()).isZero();
-		assertThat(dailyRollupRepository.findAll().getFirst().getTotalCacheReadTokens()).isZero();
+		assertThat(rollupRepository.findByGranularity(Granularity.DAY).getFirst().getTotalCacheReadTokens()).isZero();
 	}
 
 	@Test
@@ -342,11 +333,11 @@ class UsageIngestionIntegrationTest {
 
 		assertThat(usageEventRepository.count()).isEqualTo(1);
 		assertThat(usageEventRepository.findAll().getFirst().getIdempotencyKey()).isEqualTo("retry-1");
-		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		Rollup daily = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
 		assertThat(daily.getTotalInputTokens()).isEqualTo(1000);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.033");
-		assertThat(weeklyRollupRepository.findAll().getFirst().getTotalCostUsd()).isEqualByComparingTo("0.033");
-		assertThat(monthlyRollupRepository.findAll().getFirst().getTotalCostUsd()).isEqualByComparingTo("0.033");
+		assertThat(rollupRepository.findByGranularity(Granularity.WEEK).getFirst().getTotalCostUsd()).isEqualByComparingTo("0.033");
+		assertThat(rollupRepository.findByGranularity(Granularity.MONTH).getFirst().getTotalCostUsd()).isEqualByComparingTo("0.033");
 		// A replay writes nothing, so the org's analytics cache stays valid
 		assertThat(redisTemplate.opsForValue().get(versionKey)).isEqualTo(versionAfterFirst);
 	}
@@ -383,7 +374,7 @@ class UsageIngestionIntegrationTest {
 					.andExpect(status().isCreated());
 		}
 		assertThat(usageEventRepository.count()).isEqualTo(2);
-		assertThat(dailyRollupRepository.findAll().getFirst().getTotalInputTokens()).isEqualTo(2000);
+		assertThat(rollupRepository.findByGranularity(Granularity.DAY).getFirst().getTotalInputTokens()).isEqualTo(2000);
 	}
 
 	@Test
@@ -549,9 +540,9 @@ class UsageIngestionIntegrationTest {
 		}
 
 		assertThat(usageEventRepository.count()).isEqualTo(2);
-		assertThat(dailyRollupRepository.count()).isEqualTo(1);
+		assertThat(rollupRepository.countByGranularity(Granularity.DAY)).isEqualTo(1);
 
-		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		Rollup daily = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
 		assertThat(daily.getTotalInputTokens()).isEqualTo(2000);
 		assertThat(daily.getTotalOutputTokens()).isEqualTo(4000);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.066");
@@ -571,7 +562,7 @@ class UsageIngestionIntegrationTest {
 				.andExpect(jsonPath("$.detail").value("Project not found: " + foreign.getId()));
 
 		assertThat(usageEventRepository.count()).isZero();
-		assertThat(dailyRollupRepository.count()).isZero();
+		assertThat(rollupRepository.countByGranularity(Granularity.DAY)).isZero();
 	}
 
 	@Test
@@ -605,11 +596,11 @@ class UsageIngestionIntegrationTest {
 				.andExpect(status().isCreated());
 
 		// Corrupt the daily rollup, then recompute the window covering the event
-		dailyRollupRepository.deleteAll();
+		rollupRepository.deleteByGranularity(Granularity.DAY);
 		LocalDate day = LocalDate.ofInstant(EVENT_TIME, ZoneOffset.UTC);
 		rollupRecomputeJob.recompute(day, day);
 
-		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		Rollup daily = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
 		assertThat(daily.getTotalInputTokens()).isEqualTo(1000);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.033");
 	}

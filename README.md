@@ -24,7 +24,7 @@ Track how much your team spends on LLM API calls. Applications report their toke
 
 1. An application makes an LLM call and reads the token counts from the response.
 2. It reports them to `POST /usage`. The tracker looks up the model's price **at that moment** and stores the event with its cost — so later price changes never rewrite history.
-3. Daily, weekly, and monthly summary tables (rollups) are updated in the same transaction.
+3. Daily, weekly, and monthly summary rows (rollups, one table with a granularity column) are updated in the same transaction.
 4. The dashboard reads those summaries through a short-lived Redis cache.
 
 ## Tech stack
@@ -84,13 +84,20 @@ All endpoints require a `Authorization: Bearer <token>` header except login and 
 | `POST /auth/token` | Log in — returns a JWT |
 | `GET /auth/me` | Who am I (from the token) |
 | `POST /usage` | Report a usage event (tokens in/out, cache tokens, model, project) |
-| `GET /usage` | Browse raw events, filterable and paginated |
+| `GET /usage` | Browse raw events, filterable by member, project, model and time, paginated |
 | `GET /analytics/projects` | Spend per project for a date range |
 | `GET /analytics/members` | Spend per member (top spenders first) |
 | `GET /analytics/teams` | Spend per team |
 | `GET /analytics/daily` | Day-by-day time series |
+| `GET /analytics/models` | Spend per model, optionally for one project (`projectId`) |
+| `GET /analytics/summary` | Totals for the range and for the previous range of equal length |
 | `POST /model-pricing` | Add a model price (admin only) |
 | `GET /model-pricing` | List model prices |
+| `POST /budgets` | Create a monthly spend cap for a project or team (admin only) |
+| `GET /budgets` | List budgets with month-to-date spend (admin only) |
+| `PUT /budgets/{id}` | Change limit, webhook URL or enabled flag (admin only) |
+| `DELETE /budgets/{id}` | Delete a budget and its alert history (admin only) |
+| `GET /budgets/{id}/alerts` | Alerts raised for a budget and their delivery status (admin only) |
 
 Example — report an event:
 
@@ -117,6 +124,29 @@ Model prices are seeded from [LiteLLM's public catalog](https://github.com/Berri
 
 Ingest rejects events that cannot be real with a `400` naming the field: more than 100,000,000 tokens or 10,000,000 lines in one event, a model id over 100 characters, an `eventTime` more than 5 minutes ahead of the server or older than 90 days (`INGEST_MAX_FUTURE`, `INGEST_MAX_EVENT_AGE`). An unknown model is a `422`. If the model is unknown and the catalog cannot be reached within its timeout, the answer is a `503`: retry the same request later.
 
+### Budgets and alerts
+
+A budget caps what one project or one team may spend in a calendar month (UTC):
+
+```bash
+curl -X POST http://localhost:8080/budgets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"scopeType":"PROJECT","scopeId":"<project uuid>","monthlyLimitUsd":500,"webhookUrl":"https://example.com/hooks/budget"}'
+```
+
+Once a minute the tracker compares each enabled budget with its month-to-date spend. When spend reaches 80% and again at 100% of the limit, it POSTs this JSON to the budget's webhook, once per threshold per month:
+
+```json
+{"alertId":"<uuid>","budgetId":"<uuid>","scopeType":"PROJECT","scopeId":"<uuid>","periodStart":"2026-11-01","thresholdPct":80,"spendUsd":412.37,"limitUsd":500.00}
+```
+
+- Any 2xx answer counts as delivered. Anything else is retried on the next run, up to 5 attempts, then the alert is marked `FAILED`.
+- Delivery is at-least-once; use `alertId` to drop a repeat.
+- Webhook URLs must be `https` and must not resolve to a private, loopback or link-local address. Redirects are not followed. Set `BUDGET_ALLOW_INSECURE_WEBHOOK_URLS=true` for local development only.
+- A team budget counts events by the team the member was in when the event was ingested. Spend by members without a team counts toward no team budget.
+- Alerts only notify. Ingest is never blocked by a budget.
+
 ## Try it with real Claude calls (optional)
 
 `clients/` contains a small CLI that asks Claude a question and automatically reports the request's real token usage to the tracker:
@@ -138,7 +168,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 **Rollups are written in the ingest transaction and recomputed nightly.** The dashboard never aggregates raw events. It sums pre-aggregated daily rows, and an event and its rollups commit together or not at all. A 02:30 UTC job rebuilds the last two days (plus their weeks and months) from `usage_event`, the source of truth, as a safety net.
 
-**Concurrency is handled with upserts.** Each rollup write is one `INSERT … ON CONFLICT DO UPDATE SET total = total + EXCLUDED.total`, so parallel ingests for the same member, project and day can't collide on insert or lose an increment. It's backed by a test that fires 50 ingests at once. The unique key is `NULLS NOT DISTINCT` because `team_id` is nullable. With a plain `UNIQUE`, members without a team got one row per event. The nightly job takes a `SHARE ROW EXCLUSIVE` table lock, so ingests queue for its few seconds instead of racing its delete-and-rebuild.
+**Concurrency is handled with upserts.** An ingest writes its day, week and month rollup rows with one three-row `INSERT … ON CONFLICT DO UPDATE SET total = total + EXCLUDED.total`, so parallel ingests for the same member, project and day can't collide on insert or lose an increment. It's backed by a test that fires 50 ingests at once. The unique key is `NULLS NOT DISTINCT` because `team_id` is nullable. With a plain `UNIQUE`, members without a team got one row per event. The nightly job takes a `SHARE ROW EXCLUSIVE` table lock, so ingests queue for its few seconds instead of racing its delete-and-rebuild.
 
 **The read-through cache is evicted by version.** Analytics responses are cached for 5 minutes under keys that embed a per-org version and a global generation. An ingest invalidates its org with one `INCR` after commit, and the nightly job invalidates every org by bumping the generation. There is no `KEYS`/`SCAN`, and a read racing a write can't re-cache stale totals: the reader resolves the version before it queries. If Redis is down, the cache becomes a pass-through and no request fails.
 
@@ -148,6 +178,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 ## Limitations / next steps
 
+- **Budget alerts are unsigned and coarse.** Webhook requests carry no signature, so a receiver cannot prove they came from the tracker. Thresholds are fixed at 80% and 100%, the period is always a calendar month, and changing a limit mid-month does not retract or re-send alerts already raised for that month.
 - **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
 - **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
 - **Idempotency keys never expire and replays are not compared.** A key stays reserved in its org for as long as the event exists, and a repeat with a different body silently returns the original event instead of a `409`.
@@ -186,6 +217,7 @@ token-usage-tracker/   Spring Boot API (src/main/java/dev/ekin/tokenusage)
   ├─ usage/            Event ingestion + drill-down
   ├─ pricing/          Model prices, cost calculation
   ├─ analytics/        Rollups, aggregate queries, Redis cache
+  ├─ budget/           Monthly spend caps, threshold alerts, webhook delivery
   └─ tenant/           Organizations, teams, members, projects
 ui/                    React admin dashboard (+ nginx image for the Docker demo)
 clients/               Example CLI that calls Claude and reports usage
