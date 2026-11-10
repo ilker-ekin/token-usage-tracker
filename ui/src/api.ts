@@ -53,6 +53,13 @@ async function request<T>(
   init?: RequestInit,
   { onUnauthorized = "expire" }: { onUnauthorized?: "expire" | "throw" } = {},
 ): Promise<T> {
+  // Public demo build: answer from the in-browser dataset and never touch the
+  // network. The flag is replaced at build time, so the normal build drops
+  // this branch and the demo module with it.
+  if (import.meta.env.VITE_DEMO === "true") {
+    const { handle } = await import("./demo/handler");
+    return handle<T>(path, init);
+  }
   let res: Response;
   try {
     res = await fetch(path, {

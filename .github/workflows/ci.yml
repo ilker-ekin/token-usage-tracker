@@ -74,7 +74,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
@@ -85,3 +85,21 @@ jobs:
       - name: Type-check and build
         working-directory: ui
         run: npm run build
+
+      - name: Unit tests
+        working-directory: ui
+        run: npm test
+
+      # The public demo build (GitHub Pages) must keep compiling against the API types
+      - name: Demo build
+        working-directory: ui
+        run: npm run build:demo
+
+      # The demo module is dropped from the normal build at compile time; make sure it stays that way
+      - name: Normal build contains no demo code
+        working-directory: ui
+        run: |
+          if grep -rlE "tut\.demo|acme\.example" dist; then
+            echo "Demo code leaked into the normal build"
+            exit 1
+          fi

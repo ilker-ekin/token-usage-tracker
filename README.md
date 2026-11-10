@@ -4,6 +4,10 @@
 
 Track how much your team spends on LLM API calls. Applications report their token usage after each call; the tracker prices every event, aggregates the numbers, shows spend per organization, team, project, model and member on a web dashboard, and warns a webhook when a project or team nears its monthly budget.
 
+## Try it in the browser
+
+**[Live demo](https://ilker-ekin.github.io/token-usage-tracker/)**: the real dashboard running on generated data, with nothing to install. It is a static build with no backend, so nothing is sent anywhere. Budgets you create stay in your browser, and no webhook is ever called. Use *Demo options* in the banner to view it as a member, to make the server fail, or to see the session-ended dialog. To run the real stack, see [Getting started](#getting-started).
+
 ## How it works
 
 ```
@@ -36,7 +40,7 @@ Track how much your team spends on LLM API calls. Applications report their toke
 | Database | PostgreSQL (Flyway migrations) |
 | Cache | Redis |
 | Auth | JWT (email + password login); an HttpOnly cookie for the dashboard, Bearer for scripts |
-| Dashboard | React 19, React Router 7, Recharts, Vite 8, TypeScript (`ui/`) |
+| Dashboard | React 19, React Router 7, Recharts, Vite 8, TypeScript (`ui/`); Vitest for its tests |
 | Tests | JUnit + Testcontainers (real Postgres/Redis in Docker) |
 | CI | GitHub Actions; Dependabot for Maven, npm, Actions and Docker |
 
@@ -52,7 +56,7 @@ Open http://localhost:3000 and log in with the demo accounts below. This builds 
 
 ### Local development
 
-**Prerequisites:** Docker Desktop (running), Java 21, Node.js 20+.
+**Prerequisites:** Docker Desktop (running), Java 21, Node.js 22+.
 
 ```bash
 # 1. Start PostgreSQL and Redis
@@ -90,6 +94,10 @@ You should see 30 days of demo spend (on port 3000 for the Docker quick start).
 - Every page has loading, error (with retry) and empty states. Tables export to CSV; the project page exports every event in the range, up to 20,000.
 - If the session expires, a dialog signs you in again without leaving the page, and the open view reloads its data.
 - The screens were designed in Figma first. The layout is desktop-first and has been checked in Chrome only.
+
+### The demo build
+
+`cd ui && npm run build:demo` builds the same dashboard in demo mode (`vite --mode demo`, output in `ui/dist-demo`). A single check on `VITE_DEMO` in `ui/src/api.ts` sends every request to `ui/src/demo/handler.ts` instead of the network. That module answers the same paths, shapes, sorting, validation messages and error statuses from a seeded generator of synthetic data (`ui/src/demo/data.ts`): 28 people, 9 projects, 5 teams and 5 models over 90 days, at illustrative prices. The flag is replaced at build time, so the normal build contains none of this code; CI checks that. The demo uses hash routes and a `/token-usage-tracker/` base path because GitHub Pages has no fallback for client-side routes, and `.github/workflows/pages.yml` publishes it from `main`. After forking, enable it under *Settings > Pages > Source: GitHub Actions*.
 
 ## API overview
 
@@ -204,6 +212,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 - **The recompute window is fixed at two days.** Events arriving later still update their rollups at ingest, but the nightly rebuild won't re-check them. The recompute query also filters `usage_event` on `event_time` alone, so it needs its own index, or monthly partitioning, as the table grows.
 - **The recompute job blocks ingest briefly.** While it runs, ingest requests wait on its table lock (seconds at this data size). At larger scale it should rebuild into a staging table and swap, or recompute per org.
 - **Cache version keys have no TTL.** That's one tiny key per org. If Redis evicted one under memory pressure, stale entries could be served until their 5-minute TTL expired.
+- **The live demo is a mock, not the backend.** It shares the API's TypeScript types, so a changed response shape stops it compiling, but it does not exercise the server, the database or the cache. Its numbers are synthetic and its prices illustrative.
 - **The dashboard has only been run in Chrome, at desktop width.** There are no narrow-screen layouts, and the loading states have not been checked in other browsers. The chart library (Recharts 2) is on its last maintained major version.
 - **JWT claims live for the whole token lifetime.** A member moved to another org keeps the old org in their token for up to `JWT_TTL`, and there's no revocation list.
 
@@ -214,7 +223,7 @@ cd token-usage-tracker
 ./mvnw test
 ```
 
-Docker must be running — the tests start their own throwaway Postgres and Redis containers, so nothing you run locally is touched. Beyond the endpoint tests, the suite includes concurrency tests (parallel ingests and ingests racing the nightly job), cross-org isolation tests, and a run with Redis unreachable. The same suite runs in CI on every pull request, together with the dashboard's type-check and build (`cd ui && npm run build`), and merging is blocked until both checks pass. A `changes` job looks at which files a pull request touches, so a UI-only change skips the backend tests and a backend-only change skips the UI build. A skipped check still counts as passing.
+Dashboard tests (the demo data and the in-browser API) run with `cd ui && npm test`. Docker must be running for the backend tests — they start their own throwaway Postgres and Redis containers, so nothing you run locally is touched. Beyond the endpoint tests, the suite includes concurrency tests (parallel ingests and ingests racing the nightly job), cross-org isolation tests, and a run with Redis unreachable. The same suite runs in CI on every pull request, together with the dashboard's unit tests, type-check, normal build and demo build (`cd ui && npm run build`, `npm run build:demo`), and merging is blocked until both checks pass. A `changes` job looks at which files a pull request touches, so a UI-only change skips the backend tests and a backend-only change skips the UI build. A skipped check still counts as passing.
 
 ## Configuration
 
@@ -247,7 +256,8 @@ token-usage-tracker/   Spring Boot API (src/main/java/dev/ekin/tokenusage)
 ui/                    React admin dashboard (+ nginx image for the Docker demo)
   ├─ src/pages/        One file per screen
   ├─ src/components/   Layout, KPI card, chart, table, dialogs
-  └─ src/api.ts        Typed API client; src/dateRange.tsx keeps the range in the URL
+  ├─ src/api.ts        Typed API client; src/dateRange.tsx keeps the range in the URL
+  └─ src/demo/         Generated data and in-browser API for the static demo build
 clients/               Example CLI that calls Claude and reports usage
 docker-compose.yml     Full demo stack: API, UI, PostgreSQL, Redis
 ```

@@ -67,6 +67,7 @@ implementation_plan.md
 # Frontend (ui/)
 node_modules/
 ui/dist/
+ui/dist-demo/
 *.tsbuildinfo
 
 # Local notes
