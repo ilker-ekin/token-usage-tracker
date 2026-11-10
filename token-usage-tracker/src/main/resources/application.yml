@@ -59,3 +59,15 @@ server:
   # peer (Tomcat's RemoteIpValve default), so the login rate limit sees the
   # real client. A header sent by a client connecting directly is ignored.
   forward-headers-strategy: native
+
+---
+# The 'dev' profile (local development and the Docker demo) serves the
+# dashboard over plain http, where some browsers drop a Secure cookie.
+spring:
+  config:
+    activate:
+      on-profile: dev
+app:
+  auth:
+    session-cookie:
+      secure: ${AUTH_COOKIE_SECURE:false}
