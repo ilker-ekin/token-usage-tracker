@@ -15,7 +15,40 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides which jobs a pull request needs, so a UI-only change does not wait
+  # on the backend tests and the other way round. `test` and `ui` are required
+  # checks, so they are skipped with `if:` (a skipped job passes a required
+  # check) rather than with a workflow-level `paths:` filter (which would leave
+  # them pending). Pushes to main always run everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.diff.outputs.backend }}
+      ui: ${{ steps.diff.outputs.ui }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The PR merge commit and its first parent, the base branch tip.
+          fetch-depth: 2
+
+      - id: diff
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only HEAD^1 HEAD)
+          printf 'Changed files:\n%s\n' "$files"
+          # A change to this workflow runs both jobs.
+          matches() { echo "$files" | grep -qE "$1" && echo true || echo false; }
+          echo "backend=$(matches '^(token-usage-tracker/|\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
+          echo "ui=$(matches '^(ui/|\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -32,6 +65,8 @@ jobs:
         run: ./mvnw test
 
   ui:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
 
     steps:
