@@ -1,6 +1,8 @@
 package dev.ekin.tokenusage.config;
 
 import dev.ekin.tokenusage.auth.JwtAuthenticationFilter;
+import dev.ekin.tokenusage.auth.LoginRateLimitProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -21,6 +23,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@EnableConfigurationProperties(LoginRateLimitProperties.class)
 public class SecurityConfig {
 
 	@Bean

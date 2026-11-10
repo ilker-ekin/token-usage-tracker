@@ -27,6 +27,12 @@ spring:
       port: ${REDIS_PORT:6379}
 
 app:
+  auth:
+    rate-limit:
+      # Failed logins remembered per email and per client address.
+      max-failures-per-email: ${LOGIN_MAX_FAILURES_PER_EMAIL:5}
+      max-failures-per-ip: ${LOGIN_MAX_FAILURES_PER_IP:20}
+      window: ${LOGIN_FAILURE_WINDOW:PT15M}
   jwt:
     # HS256 needs >= 32 bytes. The default only works under the 'dev'
     # profile — everywhere else startup fails unless JWT_SECRET is set
@@ -42,3 +48,10 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+
+server:
+  # Behind the nginx proxy every request arrives from nginx's address. With
+  # this, X-Forwarded-For is honored when it comes from a private-network
+  # peer (Tomcat's RemoteIpValve default), so the login rate limit sees the
+  # real client. A header sent by a client connecting directly is ignored.
+  forward-headers-strategy: native

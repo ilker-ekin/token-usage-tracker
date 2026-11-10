@@ -1,0 +1,42 @@
+# Weekly dependency update PRs. Minor and patch updates are grouped into one
+# PR per ecosystem; major updates arrive on their own so they get a real look.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /token-usage-tracker
+    schedule:
+      interval: weekly
+    groups:
+      maven-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    groups:
+      ui-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /clients
+    schedule:
+      interval: weekly
+    groups:
+      clients-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /token-usage-tracker
+      - /ui
+    schedule:
+      interval: weekly
