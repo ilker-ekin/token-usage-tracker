@@ -73,7 +73,7 @@ Open http://localhost:5173 and log in:
 | `member1@acme.dev` | `seed-password` | Admin |
 | `member2@acme.dev` … `member10@acme.dev` | `seed-password` | Member |
 
-You should see 30 days of demo spend across the Overview, Trends, Members, Projects, and Teams pages (on port 3000 for the Docker quick start).
+You should see 30 days of demo spend across the Overview, Trends, Members, Projects, and Teams pages (on port 3000 for the Docker quick start). Click a project for its model breakdown and raw events. Admins also get Budgets (at `/admin/budgets`). The date range lives in the URL, so any view can be bookmarked or shared.
 
 ## API overview
 
@@ -83,6 +83,7 @@ All endpoints require authentication except login, logout and health. Programmat
 |---|---|
 | `POST /auth/token` | Log in — returns a JWT |
 | `GET /auth/me` | Who am I (from the token) |
+| `GET /analytics/directory` | Every project, team and member of the org, for pickers and filters |
 | `POST /auth/logout` | Clear the dashboard session cookie |
 | `POST /usage` | Report a usage event (tokens in/out, cache tokens, model, project) |
 | `GET /usage` | Browse raw events, filterable by member, project, model and time, paginated |

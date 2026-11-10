@@ -10,6 +10,7 @@ public interface TeamRepository extends JpaRepository<Team, UUID> {
 
 	List<Team> findByOrgId(UUID orgId);
 
+	List<Team> findByOrgIdOrderByName(UUID orgId);
 	Optional<Team> findByIdAndOrgId(UUID id, UUID orgId);
 
 }
