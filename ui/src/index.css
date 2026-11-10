@@ -925,3 +925,74 @@ tr.clickable:focus-visible {
   font-size: 13px;
   margin-bottom: 12px;
 }
+
+/* ---- Public demo banner (demo build only) ---- */
+.demo-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--info-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: var(--info);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.demo-banner p {
+  margin: 0;
+}
+.demo-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
+.demo-menu {
+  position: relative;
+  flex: none;
+}
+.demo-menu summary {
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.demo-menu-panel {
+  position: absolute;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  width: 320px;
+  margin-top: 8px;
+  padding: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgb(16 24 40 / 12%);
+}
+.demo-menu-panel fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.demo-menu-panel legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-weight: 600;
+}
+.demo-menu-panel .hint {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.demo-menu-panel .btn {
+  white-space: normal;
+  text-align: left;
+  border: 1px solid var(--border-strong);
+}

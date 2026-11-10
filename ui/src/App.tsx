@@ -19,7 +19,8 @@ import { RequireSession } from "./session";
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
+      {/* The demo has no sign-in: it starts signed in */}
+      <Route path="/login" element={import.meta.env.VITE_DEMO === "true" ? <Navigate to="/" replace /> : <Login />} />
       <Route
         path="/"
         element={

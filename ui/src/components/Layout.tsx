@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { logout as endSession } from "../api";
 import { downloadCsv } from "../csv";
@@ -6,6 +6,11 @@ import { PageChromeProvider, useChrome } from "../pageChrome";
 import { useIsAdmin, useMe } from "../session";
 import RangeControl from "./RangeControl";
 import SessionGate from "./SessionGate";
+
+// Only the public demo build has the banner. The flag is a build-time constant,
+// so the normal build leaves the import (and the demo module) out.
+const DEMO = import.meta.env.VITE_DEMO === "true";
+const DemoBanner = DEMO ? lazy(() => import("../demo/DemoBanner")) : null;
 
 const NAV = [
   { to: "/", label: "Overview", end: true },
@@ -53,12 +58,19 @@ function Shell() {
           <div className="who" title={me.email}>
             {me.email}
           </div>
-          <button className="logout" onClick={logout}>
-            Log out
-          </button>
+          {!DEMO && (
+            <button className="logout" onClick={logout}>
+              Log out
+            </button>
+          )}
         </div>
       </aside>
       <main className="main">
+        {DemoBanner && (
+          <Suspense fallback={null}>
+            <DemoBanner />
+          </Suspense>
+        )}
         <TopBar />
         <Outlet />
       </main>

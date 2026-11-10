@@ -1,0 +1,64 @@
+name: Demo
+
+# Publishes the static demo (ui/, built with --mode demo) to GitHub Pages.
+# It has no backend and makes no network requests; see issue #40.
+# One-time setup: repository Settings > Pages > Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ui/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Let a running deploy finish; a newer one waits its turn.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Unit tests
+        working-directory: ui
+        run: npm test
+
+      - name: Build the demo
+        working-directory: ui
+        run: npm run build:demo
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ui/dist-demo
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
