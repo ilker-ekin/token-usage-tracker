@@ -53,6 +53,7 @@ public interface UsageEventRepository
 		UUID getTeamId();
 		UUID getMemberId();
 		UUID getProjectId();
+		String getModel();
 		long getInputTokens();
 		long getOutputTokens();
 		long getCacheReadTokens();
@@ -64,6 +65,7 @@ public interface UsageEventRepository
 
 	@Query("""
 			select e.orgId as orgId, e.teamId as teamId, e.memberId as memberId, e.projectId as projectId,
+			       e.model as model,
 			       sum(e.inputTokens) as inputTokens, sum(e.outputTokens) as outputTokens,
 			       sum(e.cacheReadTokens) as cacheReadTokens,
 			       sum(e.cacheCreationTokens) as cacheCreationTokens,
@@ -72,7 +74,7 @@ public interface UsageEventRepository
 			       sum(coalesce(e.linesRemoved, 0)) as linesRemoved
 			from UsageEvent e
 			where e.eventTime >= :from and e.eventTime < :to
-			group by e.orgId, e.teamId, e.memberId, e.projectId
+			group by e.orgId, e.teamId, e.memberId, e.projectId, e.model
 			""")
 	List<UsageAggregate> aggregateBetween(@Param("from") Instant from, @Param("to") Instant to);
 

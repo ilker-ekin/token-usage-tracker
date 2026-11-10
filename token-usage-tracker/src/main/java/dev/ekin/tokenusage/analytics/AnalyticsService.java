@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -82,6 +83,53 @@ public class AnalyticsService {
 					.toList();
 			return result;
 		});
+	}
+
+	public record ModelAnalytics(String model, long inputTokens, long outputTokens,
+			long cacheReadTokens, long cacheCreationTokens, BigDecimal costUsd) {
+	}
+
+	public record Totals(long inputTokens, long outputTokens, long cacheReadTokens,
+			long cacheCreationTokens, BigDecimal costUsd, long linesAdded, long linesRemoved) {
+	}
+
+	/**
+	 * Totals for a range and for the previous range of equal length, which
+	 * ends the day before {@code from}. Both ranges are inclusive, in UTC days.
+	 */
+	public record SummaryAnalytics(LocalDate from, LocalDate to, Totals current,
+			LocalDate previousFrom, LocalDate previousTo, Totals previous) {
+	}
+
+	/** Spend per model, most expensive first; for one project when {@code projectId} is set. */
+	@Transactional(readOnly = true)
+	public List<ModelAnalytics> models(UUID orgId, LocalDate from, LocalDate to, UUID projectId) {
+		String dimension = projectId == null ? "models" : "models:" + projectId;
+		return cache.getOrLoad(orgId, dimension, from, to, ModelAnalytics[].class, () ->
+				(projectId == null
+						? rollupRepository.aggregateByModel(orgId, from, to)
+						: rollupRepository.aggregateByModelForProject(orgId, projectId, from, to))
+						.stream()
+						.map(a -> new ModelAnalytics(a.getModel(), a.getInputTokens(), a.getOutputTokens(),
+								a.getCacheReadTokens(), a.getCacheCreationTokens(), a.getCostUsd()))
+						.toList());
+	}
+
+	@Transactional(readOnly = true)
+	public SummaryAnalytics summary(UUID orgId, LocalDate from, LocalDate to) {
+		long days = ChronoUnit.DAYS.between(from, to) + 1;
+		LocalDate previousTo = from.minusDays(1);
+		LocalDate previousFrom = previousTo.minusDays(days - 1);
+		return cache.getOrLoad(orgId, "summary", from, to, SummaryAnalytics[].class, () ->
+				List.of(new SummaryAnalytics(from, to, totals(orgId, from, to),
+						previousFrom, previousTo, totals(orgId, previousFrom, previousTo))))
+				.getFirst();
+	}
+
+	private Totals totals(UUID orgId, LocalDate from, LocalDate to) {
+		RollupRepository.TotalsAgg t = rollupRepository.totals(orgId, from, to);
+		return new Totals(t.getInputTokens(), t.getOutputTokens(), t.getCacheReadTokens(),
+				t.getCacheCreationTokens(), t.getCostUsd(), t.getLinesAdded(), t.getLinesRemoved());
 	}
 
 	@Transactional(readOnly = true)

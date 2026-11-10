@@ -15,8 +15,9 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Pre-aggregated usage of one member on one project in one period. Every
- * event is counted in three rows: its day, its week and its month.
+ * Pre-aggregated usage of one member on one project with one model in one
+ * period. Every event is counted in three rows: its day, its week and its
+ * month.
  */
 @Entity
 @Table(name = "rollup")
@@ -35,6 +36,10 @@ public class Rollup extends BaseEntity {
 
 	@Column(name = "project_id", nullable = false)
 	private UUID projectId;
+
+	/** Model id exactly as reported on the events, dated snapshots included. */
+	@Column(nullable = false)
+	private String model;
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
@@ -65,7 +70,7 @@ public class Rollup extends BaseEntity {
 	@Column(name = "total_lines_removed", nullable = false)
 	private long totalLinesRemoved;
 
-	public Rollup(UUID orgId, UUID teamId, UUID memberId, UUID projectId,
+	public Rollup(UUID orgId, UUID teamId, UUID memberId, UUID projectId, String model,
 			Granularity granularity, LocalDate periodStart,
 			long totalInputTokens, long totalOutputTokens,
 			long totalCacheReadTokens, long totalCacheCreationTokens, BigDecimal totalCostUsd,
@@ -74,6 +79,7 @@ public class Rollup extends BaseEntity {
 		this.teamId = teamId;
 		this.memberId = memberId;
 		this.projectId = projectId;
+		this.model = model;
 		this.granularity = granularity;
 		this.periodStart = periodStart;
 		this.totalInputTokens = totalInputTokens;

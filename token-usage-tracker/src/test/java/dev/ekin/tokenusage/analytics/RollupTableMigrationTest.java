@@ -52,7 +52,8 @@ class RollupTableMigrationTest {
 				insertOld(st, "monthly_rollup", "month_start", "2026-06-01", MEMBER, TEAM, 900, 400, 90, 36, "12.125000", 20, 9);
 			}
 
-			flyway(postgres, "latest").migrate();
+			// Stop at V8: V9 rebuilds rollup from usage_event, which this test leaves empty
+			flyway(postgres, "8").migrate();
 
 			try (Connection c = connect(postgres); Statement st = c.createStatement()) {
 				Map<String, String> byGranularity = new LinkedHashMap<>();

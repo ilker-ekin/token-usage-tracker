@@ -114,12 +114,13 @@ public class UsageController {
 	public PageResponse<UsageEventDetail> list(@AuthenticationPrincipal MemberPrincipal principal,
 			@RequestParam(required = false) UUID memberId,
 			@RequestParam(required = false) UUID projectId,
+			@RequestParam(required = false) String model,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "50") int size) {
 		Page<UsageEvent> events = usageService.search(principal.orgId(),
-				memberId, projectId, from, to, page, Math.min(size, 200));
+				memberId, projectId, model, from, to, page, Math.min(size, 200));
 		return new PageResponse<>(events.getContent().stream().map(UsageEventDetail::from).toList(),
 				events.getNumber(), events.getSize(), events.getTotalElements(), events.getTotalPages());
 	}

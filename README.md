@@ -84,11 +84,13 @@ All endpoints require a `Authorization: Bearer <token>` header except login and 
 | `POST /auth/token` | Log in — returns a JWT |
 | `GET /auth/me` | Who am I (from the token) |
 | `POST /usage` | Report a usage event (tokens in/out, cache tokens, model, project) |
-| `GET /usage` | Browse raw events, filterable and paginated |
+| `GET /usage` | Browse raw events, filterable by member, project, model and time, paginated |
 | `GET /analytics/projects` | Spend per project for a date range |
 | `GET /analytics/members` | Spend per member (top spenders first) |
 | `GET /analytics/teams` | Spend per team |
 | `GET /analytics/daily` | Day-by-day time series |
+| `GET /analytics/models` | Spend per model, optionally for one project (`projectId`) |
+| `GET /analytics/summary` | Totals for the range and for the previous range of equal length |
 | `POST /model-pricing` | Add a model price (admin only) |
 | `GET /model-pricing` | List model prices |
 | `POST /budgets` | Create a monthly spend cap for a project or team (admin only) |
