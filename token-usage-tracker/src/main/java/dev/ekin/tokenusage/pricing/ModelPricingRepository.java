@@ -23,4 +23,13 @@ public interface ModelPricingRepository extends JpaRepository<ModelPricing, UUID
 			""")
 	List<ModelPricing> findActiveAt(@Param("model") String model, @Param("at") Instant at);
 
+	/**
+	 * Serializes writers of one model's pricing until the surrounding
+	 * transaction ends, so two requests that both miss do not both insert.
+	 * The lock function returns void; the cast makes it a value JDBC can read.
+	 */
+	@Query(nativeQuery = true,
+			value = "select cast(pg_advisory_xact_lock(hashtext(:model)) as text)")
+	String lockModel(@Param("model") String model);
+
 }

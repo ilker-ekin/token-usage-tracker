@@ -3,6 +3,7 @@ package dev.ekin.tokenusage.seed;
 import dev.ekin.tokenusage.pricing.LiteLlmPricingClient;
 import dev.ekin.tokenusage.pricing.LiteLlmPricingClient.ModelPrice;
 import dev.ekin.tokenusage.pricing.ModelPricing;
+import dev.ekin.tokenusage.pricing.PricingCatalogUnavailableException;
 import dev.ekin.tokenusage.pricing.ModelPricingRepository;
 import dev.ekin.tokenusage.tenant.Member;
 import dev.ekin.tokenusage.tenant.MemberRepository;
@@ -74,6 +75,14 @@ public class DataSeeder implements CommandLineRunner {
 		this.passwordEncoder = passwordEncoder;
 	}
 
+	private ModelPrice currentPrice(ModelPrice fallback) {
+		try {
+			return liteLlmPricingClient.fetchPrice(fallback.model()).orElse(fallback);
+		} catch (PricingCatalogUnavailableException e) {
+			return fallback;
+		}
+	}
+
 	@Override
 	public void run(String... args) {
 		if (organizationRepository.count() > 0) {
@@ -108,7 +117,7 @@ public class DataSeeder implements CommandLineRunner {
 		Instant pricingValidFrom = Instant.now().minus(Duration.ofDays(365));
 		List<String> models = new ArrayList<>();
 		for (ModelPrice fallback : FALLBACK_PRICES) {
-			ModelPrice price = liteLlmPricingClient.fetchPrice(fallback.model()).orElse(fallback);
+			ModelPrice price = currentPrice(fallback);
 			modelPricingRepository.save(new ModelPricing(price.model(),
 					price.inputPricePer1k(), price.outputPricePer1k(),
 					price.cacheReadPricePer1k(), price.cacheCreationPricePer1k(),

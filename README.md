@@ -98,6 +98,7 @@ Example — report an event:
 curl -X POST http://localhost:8080/usage \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"projectId":"<uuid>","model":"claude-opus-4-8","inputTokens":1200,"outputTokens":450,"eventTime":"2026-07-07T12:00:00Z"}'
 ```
 
@@ -110,7 +111,11 @@ curl -X POST http://localhost:8080/usage \
 
 OpenAI's `prompt_tokens` already includes cached tokens, so subtract them or they are charged twice. `POST /model-pricing` takes optional `cacheReadPricePer1k` and `cacheCreationPricePer1k`. A pricing row without them charges cache tokens at the input price.
 
+Send an optional `Idempotency-Key` header (1 to 255 characters, unique per org) to make a retry safe. The first request returns `201`. A repeat with the same key returns `200` with the original event and books nothing: no second event, no rollup change. The body of a repeat is not compared with the original, so use a fresh key for every distinct event.
+
 Model prices are seeded from [LiteLLM's public catalog](https://github.com/BerriAI/litellm); unknown models are priced from the same catalog automatically on first use.
+
+Ingest rejects events that cannot be real with a `400` naming the field: more than 100,000,000 tokens or 10,000,000 lines in one event, a model id over 100 characters, an `eventTime` more than 5 minutes ahead of the server or older than 90 days (`INGEST_MAX_FUTURE`, `INGEST_MAX_EVENT_AGE`). An unknown model is a `422`. If the model is unknown and the catalog cannot be reached within its timeout, the answer is a `503`: retry the same request later.
 
 ## Try it with real Claude calls (optional)
 
@@ -129,7 +134,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 ## Design decisions
 
-**Cost is snapshotted at ingest.** Each event stores the cost computed from the price that was valid at `eventTime`. Prices are versioned (`valid_from` / `valid_to`), so adding a new price never changes what past usage cost. Unknown models are priced once from LiteLLM's catalog and persisted.
+**Cost is snapshotted at ingest.** Each event stores the cost computed from the price that was valid at `eventTime`. Prices are versioned (`valid_from` / `valid_to`), so adding a new price never changes what past usage cost. Unknown models are priced once from LiteLLM's catalog and persisted. That lookup is a network call, so it runs before the ingest transaction starts, with a 2 s connect and 5 s read timeout, and the downloaded catalog is reused for 10 minutes. A slow or failing catalog never holds a database connection.
 
 **Rollups are written in the ingest transaction and recomputed nightly.** The dashboard never aggregates raw events. It sums pre-aggregated daily rows, and an event and its rollups commit together or not at all. A 02:30 UTC job rebuilds the last two days (plus their weeks and months) from `usage_event`, the source of truth, as a safety net.
 
@@ -145,7 +150,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 - **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
 - **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
-- **Ingest isn't idempotent.** A client that retries after a timeout books the event twice. The next step is an optional `Idempotency-Key` header, stored with the event under a unique constraint.
+- **Idempotency keys never expire and replays are not compared.** A key stays reserved in its org for as long as the event exists, and a repeat with a different body silently returns the original event instead of a `409`.
 - **`/analytics/teams` omits team-less spend.** The query inner-joins `team`, so members without a team are missing from that view (they're still in the other views).
 - **The recompute window is fixed at two days.** Events arriving later still update their rollups at ingest, but the nightly rebuild won't re-check them. The recompute query also filters `usage_event` on `event_time` alone, so it needs its own index, or monthly partitioning, as the table grows.
 - **The recompute job blocks ingest briefly.** While it runs, ingest requests wait on its table lock (seconds at this data size). At larger scale it should rebuild into a staging table and swap, or recompute per org.

@@ -10,6 +10,8 @@ import dev.ekin.tokenusage.analytics.WeeklyRollup;
 import dev.ekin.tokenusage.analytics.WeeklyRollupRepository;
 import dev.ekin.tokenusage.pricing.ModelPricing;
 import dev.ekin.tokenusage.pricing.ModelPricingRepository;
+import dev.ekin.tokenusage.pricing.PricingCatalogUnavailableException;
+import dev.ekin.tokenusage.pricing.StubLiteLlmPricingClient;
 import dev.ekin.tokenusage.tenant.Member;
 import dev.ekin.tokenusage.tenant.MemberRepository;
 import dev.ekin.tokenusage.tenant.Organization;
@@ -24,6 +26,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.JsonNode;
@@ -81,6 +84,12 @@ class UsageIngestionIntegrationTest {
 	MonthlyRollupRepository monthlyRollupRepository;
 	@Autowired
 	RollupRecomputeJob rollupRecomputeJob;
+	@Autowired
+	UsageService usageService;
+	@Autowired
+	StubLiteLlmPricingClient pricingCatalog;
+	@Autowired
+	StringRedisTemplate redisTemplate;
 
 	Member member;
 	Project project;
@@ -304,6 +313,228 @@ class UsageIngestionIntegrationTest {
 				// Seven decimals survive the round trip through NUMERIC(18,10)
 				.andExpect(jsonPath("$.cacheReadPricePer1k").value(0.0000375))
 				.andExpect(jsonPath("$.cacheCreationPricePer1k").doesNotExist());
+	}
+
+	@Test
+	void replayWithSameIdempotencyKeyReturnsTheFirstEventAndBooksNothing() throws Exception {
+		String token = obtainToken();
+		String first = mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + token)
+						.header("Idempotency-Key", "retry-1")
+						.contentType("application/json")
+						.content(ingestJson()))
+				.andExpect(status().isCreated())
+				.andReturn().getResponse().getContentAsString();
+		String firstId = objectMapper.readValue(first, JsonNode.class).get("id").asString();
+		String versionKey = "analytics:ver:" + member.getOrgId();
+		String versionAfterFirst = redisTemplate.opsForValue().get(versionKey);
+		assertThat(versionAfterFirst).isNotNull();
+
+		// The replay even carries different numbers: the original event wins
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + token)
+						.header("Idempotency-Key", "retry-1")
+						.contentType("application/json")
+						.content(ingestJson().replace("1000", "999999")))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.id").value(firstId))
+				.andExpect(jsonPath("$.costUsd").value(0.033));
+
+		assertThat(usageEventRepository.count()).isEqualTo(1);
+		assertThat(usageEventRepository.findAll().getFirst().getIdempotencyKey()).isEqualTo("retry-1");
+		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		assertThat(daily.getTotalInputTokens()).isEqualTo(1000);
+		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo("0.033");
+		assertThat(weeklyRollupRepository.findAll().getFirst().getTotalCostUsd()).isEqualByComparingTo("0.033");
+		assertThat(monthlyRollupRepository.findAll().getFirst().getTotalCostUsd()).isEqualByComparingTo("0.033");
+		// A replay writes nothing, so the org's analytics cache stays valid
+		assertThat(redisTemplate.opsForValue().get(versionKey)).isEqualTo(versionAfterFirst);
+	}
+
+	@Test
+	void replaySucceedsEvenIfThePricingRowIsGone() throws Exception {
+		String token = obtainToken();
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + token)
+						.header("Idempotency-Key", "retry-2")
+						.contentType("application/json")
+						.content(ingestJson()))
+				.andExpect(status().isCreated());
+		modelPricingRepository.deleteAll();
+
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + token)
+						.header("Idempotency-Key", "retry-2")
+						.contentType("application/json")
+						.content(ingestJson().replace("claude-sonnet-4-6", "unknown-model")))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.costUsd").value(0.033));
+	}
+
+	@Test
+	void differentIdempotencyKeysBookSeparateEvents() throws Exception {
+		String token = obtainToken();
+		for (String key : new String[] {"a", "b"}) {
+			mockMvc.perform(post("/usage")
+							.header("Authorization", "Bearer " + token)
+							.header("Idempotency-Key", key)
+							.contentType("application/json")
+							.content(ingestJson()))
+					.andExpect(status().isCreated());
+		}
+		assertThat(usageEventRepository.count()).isEqualTo(2);
+		assertThat(dailyRollupRepository.findAll().getFirst().getTotalInputTokens()).isEqualTo(2000);
+	}
+
+	@Test
+	void sameIdempotencyKeyInTwoOrgsBooksTwoEvents() {
+		Organization otherOrg = organizationRepository.save(new Organization("Other Org", "other-org"));
+		Member otherMember = memberRepository.save(new Member(otherOrg.getId(), null,
+				"other@other.dev", "Other", null, "MEMBER"));
+		Project otherProject = projectRepository.save(new Project(otherOrg.getId(), "other-project"));
+
+		UsageService.IngestResult mine = usageService.ingest(member.getId(),
+				command(project.getId()), "shared-key");
+		UsageService.IngestResult theirs = usageService.ingest(otherMember.getId(),
+				command(otherProject.getId()), "shared-key");
+
+		assertThat(mine.created()).isTrue();
+		assertThat(theirs.created()).isTrue();
+		assertThat(theirs.event().getId()).isNotEqualTo(mine.event().getId());
+		assertThat(usageEventRepository.count()).isEqualTo(2);
+	}
+
+	@Test
+	void keyedIngestStoresNullLinesAndTeam() {
+		Member teamless = memberRepository.save(new Member(member.getOrgId(), null,
+				"solo@test.dev", "Solo", null, "MEMBER"));
+		UsageEvent event = usageService.ingest(teamless.getId(), new UsageService.IngestCommand(
+				project.getId(), "claude-sonnet-4-6", 1000, 2000, null, null, EVENT_TIME), "k").event();
+
+		assertThat(event.getTeamId()).isNull();
+		assertThat(event.getLinesAdded()).isNull();
+		assertThat(event.getLinesRemoved()).isNull();
+		assertThat(event.getCostUsd()).isEqualByComparingTo("0.033");
+		assertThat(event.getCreatedAt()).isNotNull();
+	}
+
+	@Test
+	void blankOrOversizedIdempotencyKeyIsRejected() throws Exception {
+		String token = obtainToken();
+		for (String key : new String[] {" ", "k".repeat(256)}) {
+			mockMvc.perform(post("/usage")
+							.header("Authorization", "Bearer " + token)
+							.header("Idempotency-Key", key)
+							.contentType("application/json")
+							.content(ingestJson()))
+					.andExpect(status().isBadRequest());
+		}
+		assertThat(usageEventRepository.count()).isZero();
+	}
+
+	private UsageService.IngestCommand command(UUID projectId) {
+		return new UsageService.IngestCommand(projectId, "claude-sonnet-4-6", 1000, 2000, 1, 1, EVENT_TIME);
+	}
+
+	private void expectRejected(String json, String field) throws Exception {
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(json))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.errors." + field).isNotEmpty());
+		assertThat(usageEventRepository.count()).isZero();
+	}
+
+	@Test
+	void tokenCountsAboveTheLimitAreRejectedNamingTheField() throws Exception {
+		expectRejected(ingestJson().replace("\"inputTokens\": 1000", "\"inputTokens\": 100000001"),
+				"inputTokens");
+		expectRejected(ingestJson().replace("\"outputTokens\": 2000", "\"outputTokens\": 100000001"),
+				"outputTokens");
+		expectRejected(cacheIngestJson().replace("\"cacheReadTokens\": 10000", "\"cacheReadTokens\": 100000001"),
+				"cacheReadTokens");
+		expectRejected(cacheIngestJson().replace("\"cacheCreationTokens\": 4000", "\"cacheCreationTokens\": 100000001"),
+				"cacheCreationTokens");
+	}
+
+	@Test
+	void lineCountsAboveTheLimitAreRejectedNamingTheField() throws Exception {
+		expectRejected(ingestJson().replace("\"linesAdded\": 42", "\"linesAdded\": 10000001"), "linesAdded");
+		expectRejected(ingestJson().replace("\"linesRemoved\": 7", "\"linesRemoved\": 10000001"), "linesRemoved");
+	}
+
+	@Test
+	void modelLongerThanTheColumnIsRejectedNotA500() throws Exception {
+		expectRejected(ingestJson().replace("claude-sonnet-4-6", "m".repeat(101)), "model");
+	}
+
+	@Test
+	void valuesExactlyAtTheLimitsAreAccepted() throws Exception {
+		modelPricingRepository.save(new ModelPricing("m".repeat(100),
+				new BigDecimal("0.003"), new BigDecimal("0.015"),
+				Instant.parse("2026-01-01T00:00:00Z"), null));
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(ingestJson()
+								.replace("claude-sonnet-4-6", "m".repeat(100))
+								.replace("\"inputTokens\": 1000", "\"inputTokens\": 100000000")
+								.replace("\"linesAdded\": 42", "\"linesAdded\": 10000000")))
+				.andExpect(status().isCreated())
+				// (100,000,000 * 0.003 + 2000 * 0.015) / 1000
+				.andExpect(jsonPath("$.costUsd").value(300.03));
+	}
+
+	@Test
+	void eventTimeInTheFutureIsRejected() throws Exception {
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(ingestJson().replace(EVENT_TIME.toString(),
+								Instant.now().plusSeconds(3600).toString())))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.detail").value("eventTime is in the future"));
+		assertThat(usageEventRepository.count()).isZero();
+	}
+
+	@Test
+	void eventTimeWithinClockSkewIsAccepted() throws Exception {
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(ingestJson().replace(EVENT_TIME.toString(),
+								Instant.now().plusSeconds(60).toString())))
+				.andExpect(status().isCreated());
+	}
+
+	@Test
+	void eventTimeOlderThanTheConfiguredAgeIsRejected() throws Exception {
+		// The suite runs with app.ingest.max-event-age=P3650D
+		mockMvc.perform(post("/usage")
+						.header("Authorization", "Bearer " + obtainToken())
+						.contentType("application/json")
+						.content(ingestJson().replace(EVENT_TIME.toString(), "2000-01-01T00:00:00Z")))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.detail").value("eventTime is older than the accepted 3650 days"));
+		assertThat(usageEventRepository.count()).isZero();
+	}
+
+	@Test
+	void unavailablePricingCatalogReturns503NotTheUnknownModel422() throws Exception {
+		pricingCatalog.respondWith(model -> {
+			throw new PricingCatalogUnavailableException("The model pricing catalog is unavailable; retry later", null);
+		});
+		try {
+			mockMvc.perform(post("/usage")
+							.header("Authorization", "Bearer " + obtainToken())
+							.contentType("application/json")
+							.content(ingestJson().replace("claude-sonnet-4-6", "unknown-model")))
+					.andExpect(status().isServiceUnavailable())
+					.andExpect(jsonPath("$.detail").value("The model pricing catalog is unavailable; retry later"));
+		} finally {
+			pricingCatalog.reset();
+		}
 	}
 
 	@Test
