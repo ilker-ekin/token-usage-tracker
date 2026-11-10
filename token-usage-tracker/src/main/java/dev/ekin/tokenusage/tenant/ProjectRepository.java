@@ -10,6 +10,8 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
 
 	List<Project> findByOrgId(UUID orgId);
 
+	List<Project> findByOrgIdOrderByName(UUID orgId);
+
 	Optional<Project> findByIdAndOrgId(UUID id, UUID orgId);
 
 }

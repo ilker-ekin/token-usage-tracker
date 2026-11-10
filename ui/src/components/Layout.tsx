@@ -1,19 +1,33 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { logout as endSession } from "../api";
-import { useDateRange } from "../dateRange";
+import { downloadCsv } from "../csv";
+import { PageChromeProvider, useChrome } from "../pageChrome";
+import { useIsAdmin, useMe } from "../session";
+import RangeControl from "./RangeControl";
+import SessionGate from "./SessionGate";
 
-const TITLES: Record<string, string> = {
-  "/": "Overview",
-  "/trends": "Trends",
-  "/members": "Members",
-  "/projects": "Projects",
-  "/teams": "Teams",
-};
+const NAV = [
+  { to: "/", label: "Overview", end: true },
+  { to: "/trends", label: "Trends" },
+  { to: "/members", label: "Members" },
+  { to: "/projects", label: "Projects" },
+  { to: "/teams", label: "Teams" },
+];
 
 export default function Layout() {
-  const { from, to, setFrom, setTo } = useDateRange();
+  return (
+    <PageChromeProvider>
+      <Shell />
+    </PageChromeProvider>
+  );
+}
+
+function Shell() {
+  const me = useMe();
+  const isAdmin = useIsAdmin();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { search } = useLocation();
 
   function logout() {
     endSession()
@@ -21,33 +35,66 @@ export default function Layout() {
       .finally(() => navigate("/login"));
   }
 
+  // Links keep the range in the URL, so switching pages keeps the dates
+  const links = isAdmin ? [...NAV, { to: "/admin/budgets", label: "Budgets" }] : NAV;
+
   return (
     <div className="layout">
       <aside className="sidebar">
         <h1>TOKEN USAGE</h1>
         <nav>
-          <NavLink to="/" end>Overview</NavLink>
-          <NavLink to="/trends">Trends</NavLink>
-          <NavLink to="/members">Members</NavLink>
-          <NavLink to="/projects">Projects</NavLink>
-          <NavLink to="/teams">Teams</NavLink>
+          {links.map((l) => (
+            <NavLink key={l.to} to={{ pathname: l.to, search }} end={l.end}>
+              {l.label}
+            </NavLink>
+          ))}
         </nav>
-        <button className="logout" onClick={logout}>
-          Log out
-        </button>
+        <div className="sidebar-footer">
+          <div className="who" title={me.email}>
+            {me.email}
+          </div>
+          <button className="logout" onClick={logout}>
+            Log out
+          </button>
+        </div>
       </aside>
       <main className="main">
-        <div className="topbar">
-          <h2>{TITLES[pathname] ?? ""}</h2>
-          <div className="range-picker">
-            <span>From</span>
-            <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
-            <span>To</span>
-            <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
-          </div>
-        </div>
+        <TopBar />
         <Outlet />
       </main>
+      <SessionGate />
+    </div>
+  );
+}
+
+function TopBar() {
+  const chrome = useChrome();
+  const [exporting, setExporting] = useState(false);
+
+  async function exportCsv() {
+    if (!chrome.exportCsv) return;
+    setExporting(true);
+    try {
+      const out = await chrome.exportCsv();
+      downloadCsv(out.filename, out.csv);
+    } catch (e) {
+      window.alert(e instanceof Error ? `Export failed: ${e.message}` : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="topbar">
+      <h2>{chrome.title}</h2>
+      <div className="controls">
+        {!chrome.hideRange && <RangeControl />}
+        {chrome.action ?? (
+          <button className="btn btn-secondary" disabled={!chrome.exportCsv || exporting} onClick={exportCsv}>
+            {exporting ? "Exporting…" : "Export CSV"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
