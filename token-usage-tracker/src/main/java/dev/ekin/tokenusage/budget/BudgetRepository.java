@@ -26,8 +26,8 @@ public interface BudgetRepository extends JpaRepository<Budget, UUID> {
 	@Query(nativeQuery = true, value = """
 			select coalesce(sum(r.total_cost_usd), 0)
 			from budget b
-			left join monthly_rollup r
-			       on r.org_id = b.org_id and r.month_start = :monthStart
+			left join rollup r
+			       on r.org_id = b.org_id and r.granularity = 'MONTH' and r.period_start = :monthStart
 			      and ((b.scope_type = 'PROJECT' and r.project_id = b.scope_id)
 			        or (b.scope_type = 'TEAM' and r.team_id = b.scope_id))
 			where b.id = :budgetId

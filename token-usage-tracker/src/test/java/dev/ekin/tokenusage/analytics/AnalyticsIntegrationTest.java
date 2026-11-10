@@ -73,11 +73,7 @@ class AnalyticsIntegrationTest {
 	@Autowired
 	UsageEventRepository usageEventRepository;
 	@Autowired
-	DailyRollupRepository dailyRollupRepository;
-	@Autowired
-	WeeklyRollupRepository weeklyRollupRepository;
-	@Autowired
-	MonthlyRollupRepository monthlyRollupRepository;
+	RollupRepository rollupRepository;
 
 	Member alice;
 	Member bob;
@@ -89,9 +85,7 @@ class AnalyticsIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
-		dailyRollupRepository.deleteAll();
-		weeklyRollupRepository.deleteAll();
-		monthlyRollupRepository.deleteAll();
+		rollupRepository.deleteAll();
 		usageEventRepository.deleteAll();
 		modelPricingRepository.deleteAll();
 		memberRepository.deleteAll();
@@ -245,7 +239,7 @@ class AnalyticsIntegrationTest {
 		assertThat(keys).hasSize(1);
 
 		// Served from cache: DB changes are invisible until eviction
-		dailyRollupRepository.deleteAll();
+		rollupRepository.deleteByGranularity(Granularity.DAY);
 		mockMvc.perform(get("/analytics/projects?" + RANGE)
 						.header("Authorization", "Bearer " + token))
 				.andExpect(status().isOk())
@@ -294,7 +288,7 @@ class AnalyticsIntegrationTest {
 
 		// Empty the rollups behind the job's back: a read that still hit the
 		// cached two-project answer would prove the job did not invalidate it
-		dailyRollupRepository.deleteAll();
+		rollupRepository.deleteByGranularity(Granularity.DAY);
 		mockMvc.perform(get("/analytics/projects?" + RANGE)
 						.header("Authorization", "Bearer " + token))
 				.andExpect(status().isOk())

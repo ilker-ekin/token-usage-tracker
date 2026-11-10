@@ -24,7 +24,7 @@ Track how much your team spends on LLM API calls. Applications report their toke
 
 1. An application makes an LLM call and reads the token counts from the response.
 2. It reports them to `POST /usage`. The tracker looks up the model's price **at that moment** and stores the event with its cost — so later price changes never rewrite history.
-3. Daily, weekly, and monthly summary tables (rollups) are updated in the same transaction.
+3. Daily, weekly, and monthly summary rows (rollups, one table with a granularity column) are updated in the same transaction.
 4. The dashboard reads those summaries through a short-lived Redis cache.
 
 ## Tech stack
@@ -166,7 +166,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 **Rollups are written in the ingest transaction and recomputed nightly.** The dashboard never aggregates raw events. It sums pre-aggregated daily rows, and an event and its rollups commit together or not at all. A 02:30 UTC job rebuilds the last two days (plus their weeks and months) from `usage_event`, the source of truth, as a safety net.
 
-**Concurrency is handled with upserts.** Each rollup write is one `INSERT … ON CONFLICT DO UPDATE SET total = total + EXCLUDED.total`, so parallel ingests for the same member, project and day can't collide on insert or lose an increment. It's backed by a test that fires 50 ingests at once. The unique key is `NULLS NOT DISTINCT` because `team_id` is nullable. With a plain `UNIQUE`, members without a team got one row per event. The nightly job takes a `SHARE ROW EXCLUSIVE` table lock, so ingests queue for its few seconds instead of racing its delete-and-rebuild.
+**Concurrency is handled with upserts.** An ingest writes its day, week and month rollup rows with one three-row `INSERT … ON CONFLICT DO UPDATE SET total = total + EXCLUDED.total`, so parallel ingests for the same member, project and day can't collide on insert or lose an increment. It's backed by a test that fires 50 ingests at once. The unique key is `NULLS NOT DISTINCT` because `team_id` is nullable. With a plain `UNIQUE`, members without a team got one row per event. The nightly job takes a `SHARE ROW EXCLUSIVE` table lock, so ingests queue for its few seconds instead of racing its delete-and-rebuild.
 
 **The read-through cache is evicted by version.** Analytics responses are cached for 5 minutes under keys that embed a per-org version and a global generation. An ingest invalidates its org with one `INCR` after commit, and the nightly job invalidates every org by bumping the generation. There is no `KEYS`/`SCAN`, and a read racing a write can't re-cache stale totals: the reader resolves the version before it queries. If Redis is down, the cache becomes a pass-through and no request fails.
 

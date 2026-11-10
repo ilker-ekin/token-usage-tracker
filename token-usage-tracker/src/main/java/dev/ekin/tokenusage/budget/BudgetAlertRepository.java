@@ -33,8 +33,8 @@ public interface BudgetAlertRepository extends JpaRepository<BudgetAlert, UUID> 
 			cross join (values (80), (100)) as t(pct)
 			cross join lateral (
 			    select coalesce(sum(r.total_cost_usd), 0) as spend
-			    from monthly_rollup r
-			    where r.org_id = b.org_id and r.month_start = :monthStart
+			    from rollup r
+			    where r.org_id = b.org_id and r.granularity = 'MONTH' and r.period_start = :monthStart
 			      and ((b.scope_type = 'PROJECT' and r.project_id = b.scope_id)
 			        or (b.scope_type = 'TEAM' and r.team_id = b.scope_id))
 			) s

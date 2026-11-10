@@ -2,9 +2,7 @@ package dev.ekin.tokenusage.budget;
 
 import com.sun.net.httpserver.HttpServer;
 import dev.ekin.tokenusage.TestcontainersConfiguration;
-import dev.ekin.tokenusage.analytics.DailyRollupRepository;
-import dev.ekin.tokenusage.analytics.MonthlyRollupRepository;
-import dev.ekin.tokenusage.analytics.WeeklyRollupRepository;
+import dev.ekin.tokenusage.analytics.RollupRepository;
 import dev.ekin.tokenusage.pricing.ModelPricing;
 import dev.ekin.tokenusage.pricing.ModelPricingRepository;
 import dev.ekin.tokenusage.tenant.Member;
@@ -97,11 +95,7 @@ class BudgetIntegrationTest {
 	@Autowired
 	UsageEventRepository usageEventRepository;
 	@Autowired
-	DailyRollupRepository dailyRollupRepository;
-	@Autowired
-	WeeklyRollupRepository weeklyRollupRepository;
-	@Autowired
-	MonthlyRollupRepository monthlyRollupRepository;
+	RollupRepository rollupRepository;
 
 	Organization org;
 	Team team;
@@ -154,9 +148,7 @@ class BudgetIntegrationTest {
 	private void cleanDatabase() {
 		budgetAlertRepository.deleteAll();
 		budgetRepository.deleteAll();
-		dailyRollupRepository.deleteAll();
-		weeklyRollupRepository.deleteAll();
-		monthlyRollupRepository.deleteAll();
+		rollupRepository.deleteAll();
 		usageEventRepository.deleteAll();
 		modelPricingRepository.deleteAll();
 		memberRepository.deleteAll();
