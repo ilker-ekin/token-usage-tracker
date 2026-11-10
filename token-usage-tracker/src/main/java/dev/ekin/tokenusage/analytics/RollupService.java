@@ -35,7 +35,7 @@ public class RollupService {
 		long linesRemoved = e.getLinesRemoved() == null ? 0 : e.getLinesRemoved();
 
 		rollupRepository.upsertAdd(e.getOrgId(), e.getTeamId(), e.getMemberId(), e.getProjectId(),
-				Granularity.DAY.periodStart(day), Granularity.WEEK.periodStart(day),
+				e.getModel(), Granularity.DAY.periodStart(day), Granularity.WEEK.periodStart(day),
 				Granularity.MONTH.periodStart(day),
 				e.getInputTokens(), e.getOutputTokens(),
 				e.getCacheReadTokens(), e.getCacheCreationTokens(),

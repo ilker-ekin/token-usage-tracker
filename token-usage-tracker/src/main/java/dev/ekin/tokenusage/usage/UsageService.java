@@ -186,7 +186,8 @@ public class UsageService {
 	}
 
 	@Transactional(readOnly = true)
-	public Page<UsageEvent> search(UUID orgId, UUID memberId, UUID projectId,
+	/** {@code model} matches the id exactly as reported on the event. */
+	public Page<UsageEvent> search(UUID orgId, UUID memberId, UUID projectId, String model,
 			Instant from, Instant to, int page, int size) {
 		Specification<UsageEvent> spec = (root, query, cb) -> cb.equal(root.get("orgId"), orgId);
 		if (memberId != null) {
@@ -194,6 +195,9 @@ public class UsageService {
 		}
 		if (projectId != null) {
 			spec = spec.and((root, query, cb) -> cb.equal(root.get("projectId"), projectId));
+		}
+		if (model != null && !model.isBlank()) {
+			spec = spec.and((root, query, cb) -> cb.equal(root.get("model"), model));
 		}
 		if (from != null) {
 			spec = spec.and((root, query, cb) -> cb.greaterThanOrEqualTo(root.get("eventTime"), from));

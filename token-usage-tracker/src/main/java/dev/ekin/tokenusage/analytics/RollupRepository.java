@@ -34,20 +34,20 @@ public interface RollupRepository extends JpaRepository<Rollup, UUID> {
 	 */
 	@Modifying
 	@Query(nativeQuery = true, value = """
-			insert into rollup (id, org_id, team_id, member_id, project_id, granularity, period_start,
+			insert into rollup (id, org_id, team_id, member_id, project_id, model, granularity, period_start,
 			        total_input_tokens, total_output_tokens,
 			        total_cache_read_tokens, total_cache_creation_tokens, total_cost_usd,
 			        total_lines_added, total_lines_removed)
-			values (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, 'DAY', :day,
+			values (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, :model, 'DAY', :day,
 			        :inputTokens, :outputTokens, :cacheReadTokens, :cacheCreationTokens,
 			        :costUsd, :linesAdded, :linesRemoved),
-			       (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, 'WEEK', :weekStart,
+			       (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, :model, 'WEEK', :weekStart,
 			        :inputTokens, :outputTokens, :cacheReadTokens, :cacheCreationTokens,
 			        :costUsd, :linesAdded, :linesRemoved),
-			       (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, 'MONTH', :monthStart,
+			       (gen_random_uuid(), :orgId, cast(:teamId as uuid), :memberId, :projectId, :model, 'MONTH', :monthStart,
 			        :inputTokens, :outputTokens, :cacheReadTokens, :cacheCreationTokens,
 			        :costUsd, :linesAdded, :linesRemoved)
-			on conflict (org_id, team_id, member_id, project_id, granularity, period_start) do update set
+			on conflict (org_id, team_id, member_id, project_id, model, granularity, period_start) do update set
 			    total_input_tokens          = rollup.total_input_tokens          + excluded.total_input_tokens,
 			    total_output_tokens         = rollup.total_output_tokens         + excluded.total_output_tokens,
 			    total_cache_read_tokens     = rollup.total_cache_read_tokens     + excluded.total_cache_read_tokens,
@@ -58,6 +58,7 @@ public interface RollupRepository extends JpaRepository<Rollup, UUID> {
 			""")
 	void upsertAdd(@Param("orgId") UUID orgId, @Param("teamId") UUID teamId,
 			@Param("memberId") UUID memberId, @Param("projectId") UUID projectId,
+			@Param("model") String model,
 			@Param("day") LocalDate day, @Param("weekStart") LocalDate weekStart,
 			@Param("monthStart") LocalDate monthStart,
 			@Param("inputTokens") long inputTokens, @Param("outputTokens") long outputTokens,
@@ -167,5 +168,71 @@ public interface RollupRepository extends JpaRepository<Rollup, UUID> {
 			""")
 	List<DailyAgg> aggregateByDay(@Param("orgId") UUID orgId,
 			@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+	interface ModelAgg {
+		String getModel();
+		long getInputTokens();
+		long getOutputTokens();
+		long getCacheReadTokens();
+		long getCacheCreationTokens();
+		BigDecimal getCostUsd();
+	}
+
+	@Query("""
+			select r.model as model,
+			       sum(r.totalInputTokens) as inputTokens, sum(r.totalOutputTokens) as outputTokens,
+			       sum(r.totalCacheReadTokens) as cacheReadTokens,
+			       sum(r.totalCacheCreationTokens) as cacheCreationTokens,
+			       sum(r.totalCostUsd) as costUsd
+			from Rollup r
+			where r.orgId = :orgId and r.granularity = dev.ekin.tokenusage.analytics.Granularity.DAY
+			  and r.periodStart between :from and :to
+			group by r.model
+			order by sum(r.totalCostUsd) desc, r.model
+			""")
+	List<ModelAgg> aggregateByModel(@Param("orgId") UUID orgId,
+			@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+	/** Same as {@link #aggregateByModel} for one project; a project of another org matches nothing. */
+	@Query("""
+			select r.model as model,
+			       sum(r.totalInputTokens) as inputTokens, sum(r.totalOutputTokens) as outputTokens,
+			       sum(r.totalCacheReadTokens) as cacheReadTokens,
+			       sum(r.totalCacheCreationTokens) as cacheCreationTokens,
+			       sum(r.totalCostUsd) as costUsd
+			from Rollup r
+			where r.orgId = :orgId and r.projectId = :projectId
+			  and r.granularity = dev.ekin.tokenusage.analytics.Granularity.DAY
+			  and r.periodStart between :from and :to
+			group by r.model
+			order by sum(r.totalCostUsd) desc, r.model
+			""")
+	List<ModelAgg> aggregateByModelForProject(@Param("orgId") UUID orgId, @Param("projectId") UUID projectId,
+			@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+	interface TotalsAgg {
+		long getInputTokens();
+		long getOutputTokens();
+		long getCacheReadTokens();
+		long getCacheCreationTokens();
+		BigDecimal getCostUsd();
+		long getLinesAdded();
+		long getLinesRemoved();
+	}
+
+	/** One row; zeros when the org has no usage in the range. */
+	@Query("""
+			select coalesce(sum(r.totalInputTokens), 0) as inputTokens,
+			       coalesce(sum(r.totalOutputTokens), 0) as outputTokens,
+			       coalesce(sum(r.totalCacheReadTokens), 0) as cacheReadTokens,
+			       coalesce(sum(r.totalCacheCreationTokens), 0) as cacheCreationTokens,
+			       coalesce(sum(r.totalCostUsd), 0) as costUsd,
+			       coalesce(sum(r.totalLinesAdded), 0) as linesAdded,
+			       coalesce(sum(r.totalLinesRemoved), 0) as linesRemoved
+			from Rollup r
+			where r.orgId = :orgId and r.granularity = dev.ekin.tokenusage.analytics.Granularity.DAY
+			  and r.periodStart between :from and :to
+			""")
+	TotalsAgg totals(@Param("orgId") UUID orgId, @Param("from") LocalDate from, @Param("to") LocalDate to);
 
 }

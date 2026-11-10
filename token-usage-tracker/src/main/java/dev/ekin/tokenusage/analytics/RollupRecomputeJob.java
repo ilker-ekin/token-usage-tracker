@@ -83,7 +83,7 @@ public class RollupRecomputeJob {
 				granularity.nextPeriodStart(periodStart).atStartOfDay(ZoneOffset.UTC).toInstant());
 		for (UsageAggregate a : aggregates) {
 			rollupRepository.save(new Rollup(
-					a.getOrgId(), a.getTeamId(), a.getMemberId(), a.getProjectId(),
+					a.getOrgId(), a.getTeamId(), a.getMemberId(), a.getProjectId(), a.getModel(),
 					granularity, periodStart,
 					a.getInputTokens(), a.getOutputTokens(),
 					a.getCacheReadTokens(), a.getCacheCreationTokens(), a.getCostUsd(),
