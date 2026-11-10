@@ -1,9 +1,8 @@
 package dev.ekin.tokenusage.pricing;
 
 import dev.ekin.tokenusage.TestcontainersConfiguration;
-import dev.ekin.tokenusage.analytics.DailyRollupRepository;
-import dev.ekin.tokenusage.analytics.MonthlyRollupRepository;
-import dev.ekin.tokenusage.analytics.WeeklyRollupRepository;
+import dev.ekin.tokenusage.analytics.Granularity;
+import dev.ekin.tokenusage.analytics.RollupRepository;
 import dev.ekin.tokenusage.pricing.LiteLlmPricingClient.ModelPrice;
 import dev.ekin.tokenusage.tenant.Member;
 import dev.ekin.tokenusage.tenant.MemberRepository;
@@ -70,20 +69,14 @@ class PricingLookupIntegrationTest {
 	@Autowired
 	UsageEventRepository usageEventRepository;
 	@Autowired
-	DailyRollupRepository dailyRollupRepository;
-	@Autowired
-	WeeklyRollupRepository weeklyRollupRepository;
-	@Autowired
-	MonthlyRollupRepository monthlyRollupRepository;
+	RollupRepository rollupRepository;
 
 	Member member;
 	Project project;
 
 	@BeforeEach
 	void setUp() {
-		dailyRollupRepository.deleteAll();
-		weeklyRollupRepository.deleteAll();
-		monthlyRollupRepository.deleteAll();
+		rollupRepository.deleteAll();
 		usageEventRepository.deleteAll();
 		modelPricingRepository.deleteAll();
 		memberRepository.deleteAll();
@@ -151,7 +144,7 @@ class PricingLookupIntegrationTest {
 		assertThatThrownBy(() -> usageService.ingest(member.getId(), command("brand-new-model")))
 				.isInstanceOf(PricingCatalogUnavailableException.class);
 		assertThat(usageEventRepository.count()).isZero();
-		assertThat(dailyRollupRepository.count()).isZero();
+		assertThat(rollupRepository.countByGranularity(Granularity.DAY)).isZero();
 	}
 
 	@Test
@@ -193,7 +186,7 @@ class PricingLookupIntegrationTest {
 				.isEmpty();
 		assertThat(usageEventRepository.count()).isEqualTo(requests);
 		assertThat(modelPricingRepository.count()).isEqualTo(1);
-		assertThat(dailyRollupRepository.findAll().getFirst().getTotalInputTokens())
+		assertThat(rollupRepository.findByGranularity(Granularity.DAY).getFirst().getTotalInputTokens())
 				.isEqualTo(1000L * requests);
 	}
 

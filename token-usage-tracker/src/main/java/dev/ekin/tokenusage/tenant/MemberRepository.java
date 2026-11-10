@@ -12,6 +12,8 @@ public interface MemberRepository extends JpaRepository<Member, UUID> {
 
 	Optional<Member> findByEmail(String email);
 
+	List<Member> findByOrgIdOrderByDisplayName(UUID orgId);
+
 	interface TeamMemberCount {
 		UUID getTeamId();
 		long getMemberCount();

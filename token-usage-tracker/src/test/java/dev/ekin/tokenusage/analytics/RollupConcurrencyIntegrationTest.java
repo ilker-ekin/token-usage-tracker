@@ -67,11 +67,7 @@ class RollupConcurrencyIntegrationTest {
 	@Autowired
 	UsageEventRepository usageEventRepository;
 	@Autowired
-	DailyRollupRepository dailyRollupRepository;
-	@Autowired
-	WeeklyRollupRepository weeklyRollupRepository;
-	@Autowired
-	MonthlyRollupRepository monthlyRollupRepository;
+	RollupRepository rollupRepository;
 
 	Member teamMember;
 	Member teamlessMember;
@@ -79,9 +75,7 @@ class RollupConcurrencyIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
-		dailyRollupRepository.deleteAll();
-		weeklyRollupRepository.deleteAll();
-		monthlyRollupRepository.deleteAll();
+		rollupRepository.deleteAll();
 		usageEventRepository.deleteAll();
 		modelPricingRepository.deleteAll();
 		memberRepository.deleteAll();
@@ -123,10 +117,10 @@ class RollupConcurrencyIntegrationTest {
 
 		rollupRecomputeJob.recompute(DAY, DAY);
 
-		assertThat(dailyRollupRepository.count()).isEqualTo(2);
-		assertThat(weeklyRollupRepository.count()).isEqualTo(2);
-		assertThat(monthlyRollupRepository.count()).isEqualTo(2);
-		for (DailyRollup r : dailyRollupRepository.findAll()) {
+		assertThat(rollupRepository.countByGranularity(Granularity.DAY)).isEqualTo(2);
+		assertThat(rollupRepository.countByGranularity(Granularity.WEEK)).isEqualTo(2);
+		assertThat(rollupRepository.countByGranularity(Granularity.MONTH)).isEqualTo(2);
+		for (Rollup r : rollupRepository.findByGranularity(Granularity.DAY)) {
 			assertTotals(r);
 		}
 	}
@@ -177,11 +171,11 @@ class RollupConcurrencyIntegrationTest {
 		// Every committed event is reflected exactly once, in one row per key
 		long eventInput = usageEventRepository.findAll().stream()
 				.mapToLong(UsageEvent::getInputTokens).sum();
-		assertThat(dailyRollupRepository.count()).isEqualTo(2L * rounds);
-		assertThat(dailyRollupRepository.findAll().stream()
-				.mapToLong(RollupBase::getTotalInputTokens).sum()).isEqualTo(eventInput);
-		assertThat(monthlyRollupRepository.findAll().stream()
-				.mapToLong(RollupBase::getTotalInputTokens).sum()).isEqualTo(eventInput);
+		assertThat(rollupRepository.countByGranularity(Granularity.DAY)).isEqualTo(2L * rounds);
+		assertThat(rollupRepository.findByGranularity(Granularity.DAY).stream()
+				.mapToLong(Rollup::getTotalInputTokens).sum()).isEqualTo(eventInput);
+		assertThat(rollupRepository.findByGranularity(Granularity.MONTH).stream()
+				.mapToLong(Rollup::getTotalInputTokens).sum()).isEqualTo(eventInput);
 	}
 
 	/** Fires all ingests at once behind a start gate; fails on any exception. */
@@ -218,23 +212,23 @@ class RollupConcurrencyIntegrationTest {
 	private void assertRollupsHoldExactSum() {
 		assertThat(usageEventRepository.count()).isEqualTo(EVENTS);
 
-		List<DailyRollup> daily = dailyRollupRepository.findAll();
+		List<Rollup> daily = rollupRepository.findByGranularity(Granularity.DAY);
 		assertThat(daily).hasSize(1);
-		assertThat(daily.getFirst().getRollupDate()).isEqualTo(DAY);
+		assertThat(daily.getFirst().getPeriodStart()).isEqualTo(DAY);
 		assertTotals(daily.getFirst());
 
-		List<WeeklyRollup> weekly = weeklyRollupRepository.findAll();
+		List<Rollup> weekly = rollupRepository.findByGranularity(Granularity.WEEK);
 		assertThat(weekly).hasSize(1);
-		assertThat(weekly.getFirst().getWeekStart()).isEqualTo(DAY.with(DayOfWeek.MONDAY));
+		assertThat(weekly.getFirst().getPeriodStart()).isEqualTo(DAY.with(DayOfWeek.MONDAY));
 		assertTotals(weekly.getFirst());
 
-		List<MonthlyRollup> monthly = monthlyRollupRepository.findAll();
+		List<Rollup> monthly = rollupRepository.findByGranularity(Granularity.MONTH);
 		assertThat(monthly).hasSize(1);
-		assertThat(monthly.getFirst().getMonthStart()).isEqualTo(DAY.withDayOfMonth(1));
+		assertThat(monthly.getFirst().getPeriodStart()).isEqualTo(DAY.withDayOfMonth(1));
 		assertTotals(monthly.getFirst());
 	}
 
-	private static void assertTotals(RollupBase r) {
+	private static void assertTotals(Rollup r) {
 		long expectedIn = 0;
 		long expectedOut = 0;
 		long expectedCacheRead = 0;
