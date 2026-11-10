@@ -1,12 +1,62 @@
-# Token Usage Tracker
+<h1 align="center">Token Usage Tracker</h1>
 
-[![CI](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml)
+<p align="center">
+  <b>Know who spent what on LLMs, before the invoice arrives.</b><br>
+  Report token usage from any app. Get priced, per-team spend, a dashboard, and budget alerts.
+</p>
 
-Track how much your team spends on LLM API calls. Applications report their token usage after each call; the tracker prices every event, aggregates the numbers, shows spend per organization, team, project, model and member on a web dashboard, and warns a webhook when a project or team nears its monthly budget.
+<p align="center">
+  <a href="https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <img alt="Java 21" src="https://img.shields.io/badge/Java-21-orange">
+  <img alt="Spring Boot 4" src="https://img.shields.io/badge/Spring%20Boot-4-6db33f">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61dafb">
+  <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-336791">
+</p>
 
-## Try it in the browser
+<p align="center">
+  <a href="https://ilker-ekin.github.io/token-usage-tracker/"><b>Live demo</b></a> &middot;
+  <a href="#quick-start-docker-only">Quick start</a> &middot;
+  <a href="#how-it-works">How it works</a> &middot;
+  <a href="#design-decisions">Design decisions</a> &middot;
+  <a href="#api-overview">API</a>
+</p>
 
-**[Live demo](https://ilker-ekin.github.io/token-usage-tracker/)**: the real dashboard running on generated data, with nothing to install. It is a static build with no backend, so nothing is sent anywhere. Budgets you create stay in your browser, and no webhook is ever called. Use *Demo options* in the banner to view it as a member, to make the server fail, or to see the session-ended dialog. To run the real stack, see [Getting started](#getting-started).
+<p align="center">
+  <a href="https://ilker-ekin.github.io/token-usage-tracker/"><img src="docs/images/overview.png" alt="The Overview page: total spend, daily spend against the previous period, spend by model, top projects and budgets at risk" width="900"></a>
+</p>
+
+## What you get
+
+- **Spend you can explain.** Per organization, team, project, model and member, with the previous period alongside.
+- **Costs that never rewrite history.** Every event is priced at the moment it happens, prompt-cache tokens included.
+- **Budgets with webhooks.** A monthly cap per project or team, with an alert at 80% and again at 100%.
+- **Safe to retry.** An idempotency key turns a repeated request into a no-op.
+- **Multi-tenant by design.** The organization always comes from the token, never from the request.
+- **Tested against the real thing.** About 150 backend tests run on throwaway Postgres and Redis containers, concurrency and Redis-down cases included.
+
+## Try it
+
+| | |
+|---|---|
+| **Nothing to install** | Open the **[live demo](https://ilker-ekin.github.io/token-usage-tracker/)**. It is the real dashboard on generated data, running entirely in your browser: nothing is sent anywhere. Use *Demo options* to view it as a member, make the server fail, or see the session-ended dialog. |
+| **One command** | `docker compose up --build`, then open http://localhost:3000 and sign in as `member1@acme.dev` with the password `seed-password`. |
+
+## A closer look
+
+| Project drill-down | Budgets with the API's validation |
+|---|---|
+| <img src="docs/images/project.png" alt="A project page: spend, events, tokens, budget status, spend by model and a filterable event table"> | <img src="docs/images/budget-dialog.png" alt="The New budget dialog rejecting an http webhook URL with the message 'webhookUrl must use https'"> |
+
+## Why it is interesting to read
+
+- **Money is handled carefully.** `BigDecimal` end to end, one rounding step, and prices versioned by validity so history is stable.
+- **Concurrency is designed, not hoped for.** One `INSERT ... ON CONFLICT` upsert per ingest, advisory locks for first-time prices, `SKIP LOCKED` for the webhook outbox, and a test that fires 50 parallel ingests.
+- **Caching without stale reads.** Invalidation is a single Redis `INCR`, with no `KEYS` or `SCAN`, and Redis being down never fails a request.
+- **Security choices are explicit.** An HttpOnly cookie with a CSRF header instead of `localStorage`, rate-limited login that does not reveal which emails exist, and SSRF checks on webhook URLs.
+- **Honest about its limits.** The [limitations list](#limitations--next-steps) says what is not done yet.
+
+Details for each of these are in [Design decisions](#design-decisions).
 
 ## How it works
 
@@ -97,9 +147,19 @@ You should see 30 days of demo spend (on port 3000 for the Docker quick start).
 
 ### The demo build
 
+<details>
+<summary>How the static demo works</summary>
+
 `cd ui && npm run build:demo` builds the same dashboard in demo mode (`vite --mode demo`, output in `ui/dist-demo`). A single check on `VITE_DEMO` in `ui/src/api.ts` sends every request to `ui/src/demo/handler.ts` instead of the network. That module answers the same paths, shapes, sorting, validation messages and error statuses from a seeded generator of synthetic data (`ui/src/demo/data.ts`): 28 people, 9 projects, 5 teams and 5 models over 90 days, at illustrative prices. The flag is replaced at build time, so the normal build contains none of this code; CI checks that. The demo uses hash routes and a `/token-usage-tracker/` base path because GitHub Pages has no fallback for client-side routes, and `.github/workflows/pages.yml` publishes it from `main`. After forking, enable it under *Settings > Pages > Source: GitHub Actions*.
 
+</details>
+
 ## API overview
+
+Every endpoint, with examples for reporting events, idempotency, prompt-cache tokens and budgets.
+
+<details>
+<summary>Show the API reference</summary>
 
 All endpoints require authentication except login, logout and health. Programmatic clients send `Authorization: Bearer <token>` with the token from `POST /auth/token`. The dashboard uses the `tut_session` cookie that the same call sets instead (HttpOnly, SameSite=Strict, Secure unless `AUTH_COOKIE_SECURE=false`), so no script on the page can read the token. A write authenticated by that cookie must also carry an `X-Requested-With` header, which another site cannot add; without it the API answers `403`. `POST /auth/logout` clears the cookie.
 
@@ -173,6 +233,8 @@ Once a minute the tracker compares each enabled budget with its month-to-date sp
 - A team budget counts events by the team the member was in when the event was ingested. Spend by members without a team counts toward no team budget.
 - Alerts only notify. Ingest is never blocked by a budget.
 
+</details>
+
 ## Try it with real Claude calls (optional)
 
 `clients/` contains a small CLI that asks Claude a question and automatically reports the request's real token usage to the tracker:
@@ -204,6 +266,9 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 ## Limitations / next steps
 
+<details>
+<summary>The honest list: 11 known limitations</summary>
+
 - **Budget alerts are unsigned and coarse.** Webhook requests carry no signature, so a receiver cannot prove they came from the tracker. Thresholds are fixed at 80% and 100%, the period is always a calendar month, and changing a limit mid-month does not retract or re-send alerts already raised for that month.
 - **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
 - **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
@@ -216,6 +281,8 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 - **The dashboard has only been run in Chrome, at desktop width.** There are no narrow-screen layouts, and the loading states have not been checked in other browsers. The chart library (Recharts 2) is on its last maintained major version.
 - **JWT claims live for the whole token lifetime.** A member moved to another org keeps the old org in their token for up to `JWT_TTL`, and there's no revocation list.
 
+</details>
+
 ## Running the tests
 
 ```bash
@@ -226,6 +293,9 @@ cd token-usage-tracker
 Dashboard tests (the demo data and the in-browser API) run with `cd ui && npm test`. Docker must be running for the backend tests — they start their own throwaway Postgres and Redis containers, so nothing you run locally is touched. Beyond the endpoint tests, the suite includes concurrency tests (parallel ingests and ingests racing the nightly job), cross-org isolation tests, and a run with Redis unreachable. The same suite runs in CI on every pull request, together with the dashboard's unit tests, type-check, normal build and demo build (`cd ui && npm run build`, `npm run build:demo`), and merging is blocked until both checks pass. A `changes` job looks at which files a pull request touches, so a UI-only change skips the backend tests and a backend-only change skips the UI build. A skipped check still counts as passing.
 
 ## Configuration
+
+<details>
+<summary>Environment variables</summary>
 
 Everything is configured through environment variables (sensible localhost defaults for development):
 
@@ -242,6 +312,8 @@ Everything is configured through environment variables (sensible localhost defau
 | `BUDGET_EVALUATION_INTERVAL` | `PT1M` | How often budgets are checked |
 | `BUDGET_ALLOW_INSECURE_WEBHOOK_URLS` | `false` | Local development only |
 | `LITELLM_PRICING_URL` | LiteLLM's public catalog | Source for unknown-model prices |
+
+</details>
 
 ## Project layout
 
