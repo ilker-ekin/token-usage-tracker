@@ -77,12 +77,13 @@ You should see 30 days of demo spend across the Overview, Trends, Members, Proje
 
 ## API overview
 
-All endpoints require a `Authorization: Bearer <token>` header except login and health.
+All endpoints require authentication except login, logout and health. Programmatic clients send `Authorization: Bearer <token>` with the token from `POST /auth/token`. The dashboard uses the `tut_session` cookie that the same call sets instead (HttpOnly, SameSite=Strict, Secure unless `AUTH_COOKIE_SECURE=false`), so no script on the page can read the token. A write authenticated by that cookie must also carry an `X-Requested-With` header, which another site cannot add; without it the API answers `403`. `POST /auth/logout` clears the cookie.
 
 | Endpoint | What it does |
 |---|---|
 | `POST /auth/token` | Log in — returns a JWT |
 | `GET /auth/me` | Who am I (from the token) |
+| `POST /auth/logout` | Clear the dashboard session cookie |
 | `POST /usage` | Report a usage event (tokens in/out, model, project) |
 | `GET /usage` | Browse raw events, filterable and paginated |
 | `GET /analytics/projects` | Spend per project for a date range |

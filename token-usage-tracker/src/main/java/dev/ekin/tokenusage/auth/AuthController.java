@@ -26,10 +26,12 @@ public class AuthController {
 
 	private final AuthService authService;
 	private final JwtService jwtService;
+	private final SessionCookies sessionCookies;
 
-	public AuthController(AuthService authService, JwtService jwtService) {
+	public AuthController(AuthService authService, JwtService jwtService, SessionCookies sessionCookies) {
 		this.authService = authService;
 		this.jwtService = jwtService;
+		this.sessionCookies = sessionCookies;
 	}
 
 	public record TokenRequest(@NotBlank @Email String email, @NotBlank String password) {
@@ -46,11 +48,27 @@ public class AuthController {
 	 * request came through a trusted proxy (server.forward-headers-strategy).
 	 */
 	@PostMapping("/token")
-	public TokenResponse token(@RequestBody @Validated TokenRequest request,
+	public ResponseEntity<TokenResponse> token(@RequestBody @Validated TokenRequest request,
 			HttpServletRequest httpRequest) {
 		String token = authService.authenticate(request.email(), request.password(),
 				httpRequest.getRemoteAddr());
-		return new TokenResponse(token, "Bearer", jwtService.ttlSeconds());
+		// The body serves Bearer clients (CLI scripts); the cookie serves the
+		// dashboard, which never stores the token itself.
+		return ResponseEntity.ok()
+				.header(HttpHeaders.SET_COOKIE, sessionCookies.issue(token, jwtService.ttlSeconds()).toString())
+				.body(new TokenResponse(token, "Bearer", jwtService.ttlSeconds()));
+	}
+
+	/**
+	 * Clears the session cookie. Public and idempotent, so a dashboard whose
+	 * token has already expired can still log out cleanly. The JWT itself
+	 * stays valid until it expires; there is no revocation.
+	 */
+	@PostMapping("/logout")
+	public ResponseEntity<Void> logout() {
+		return ResponseEntity.noContent()
+				.header(HttpHeaders.SET_COOKIE, sessionCookies.clear().toString())
+				.build();
 	}
 
 	@ExceptionHandler(TooManyLoginAttemptsException.class)
