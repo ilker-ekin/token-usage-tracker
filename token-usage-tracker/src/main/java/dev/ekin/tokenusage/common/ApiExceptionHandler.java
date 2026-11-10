@@ -1,5 +1,9 @@
 package dev.ekin.tokenusage.common;
 
+import dev.ekin.tokenusage.budget.BudgetNotFoundException;
+import dev.ekin.tokenusage.budget.BudgetScopeNotFoundException;
+import dev.ekin.tokenusage.budget.DuplicateBudgetException;
+import dev.ekin.tokenusage.budget.InvalidWebhookUrlException;
 import dev.ekin.tokenusage.pricing.PricingCatalogUnavailableException;
 import dev.ekin.tokenusage.pricing.PricingNotFoundException;
 import dev.ekin.tokenusage.tenant.ProjectNotFoundException;
@@ -50,6 +54,21 @@ public class ApiExceptionHandler {
 				"Invalid request: " + String.join(", ", errors.keySet()));
 		problem.setProperty("errors", errors);
 		return problem;
+	}
+
+	@ExceptionHandler({BudgetNotFoundException.class, BudgetScopeNotFoundException.class})
+	ProblemDetail handleBudgetNotFound(RuntimeException e) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+	}
+
+	@ExceptionHandler(DuplicateBudgetException.class)
+	ProblemDetail handleDuplicateBudget(DuplicateBudgetException e) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+	}
+
+	@ExceptionHandler(InvalidWebhookUrlException.class)
+	ProblemDetail handleInvalidWebhookUrl(InvalidWebhookUrlException e) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
 	}
 
 	@ExceptionHandler(ProjectNotFoundException.class)

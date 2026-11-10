@@ -11,6 +11,7 @@ export default defineConfig({
       "/analytics": "http://localhost:8080",
       "/usage": "http://localhost:8080",
       "/model-pricing": "http://localhost:8080",
+      "/budgets": "http://localhost:8080",
     },
   },
 });
