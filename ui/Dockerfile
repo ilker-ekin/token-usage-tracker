@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Build stage ----------------------------------------------------------------
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /ui
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
