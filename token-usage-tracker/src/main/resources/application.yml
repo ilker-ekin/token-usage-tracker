@@ -44,6 +44,27 @@ app:
     secret: ${JWT_SECRET:local-dev-only-secret-change-me-0123456789abcdef}
     ttl: ${JWT_TTL:PT12H}
 
+  ingest:
+    # Accepted window for a reported eventTime (ISO-8601 durations).
+    max-future: ${INGEST_MAX_FUTURE:PT5M}
+    max-event-age: ${INGEST_MAX_EVENT_AGE:P90D}
+  budgets:
+    # How often budgets are checked against month-to-date spend.
+    evaluation-interval: ${BUDGET_EVALUATION_INTERVAL:PT1M}
+    evaluation-initial-delay: PT1M
+    webhook-connect-timeout: PT2S
+    webhook-read-timeout: PT5S
+    max-delivery-attempts: 5
+    # Local development only: accept http and private-network webhook URLs.
+    allow-insecure-webhook-urls: ${BUDGET_ALLOW_INSECURE_WEBHOOK_URLS:false}
+  pricing:
+    litellm:
+      url: ${LITELLM_PRICING_URL:https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json}
+      connect-timeout: PT2S
+      read-timeout: PT5S
+      cache-ttl: PT10M
+      failure-backoff: PT30S
+
 management:
   endpoints:
     web:

@@ -3,6 +3,7 @@ package dev.ekin.tokenusage.seed;
 import dev.ekin.tokenusage.pricing.LiteLlmPricingClient;
 import dev.ekin.tokenusage.pricing.LiteLlmPricingClient.ModelPrice;
 import dev.ekin.tokenusage.pricing.ModelPricing;
+import dev.ekin.tokenusage.pricing.PricingCatalogUnavailableException;
 import dev.ekin.tokenusage.pricing.ModelPricingRepository;
 import dev.ekin.tokenusage.tenant.Member;
 import dev.ekin.tokenusage.tenant.MemberRepository;
@@ -44,9 +45,12 @@ public class DataSeeder implements CommandLineRunner {
 
 	/** Snapshot of LiteLLM prices (per 1k tokens), 2026-07: fallback when offline. */
 	private static final List<ModelPrice> FALLBACK_PRICES = List.of(
-			new ModelPrice("claude-sonnet-4-6", new BigDecimal("0.003"), new BigDecimal("0.015")),
-			new ModelPrice("claude-opus-4-8", new BigDecimal("0.005"), new BigDecimal("0.025")),
-			new ModelPrice("claude-haiku-4-5", new BigDecimal("0.001"), new BigDecimal("0.005")));
+			new ModelPrice("claude-sonnet-4-6", new BigDecimal("0.003"), new BigDecimal("0.015"),
+					new BigDecimal("0.0003"), new BigDecimal("0.00375")),
+			new ModelPrice("claude-opus-4-8", new BigDecimal("0.005"), new BigDecimal("0.025"),
+					new BigDecimal("0.0005"), new BigDecimal("0.00625")),
+			new ModelPrice("claude-haiku-4-5", new BigDecimal("0.001"), new BigDecimal("0.005"),
+					new BigDecimal("0.0001"), new BigDecimal("0.00125")));
 
 	private final OrganizationRepository organizationRepository;
 	private final TeamRepository teamRepository;
@@ -69,6 +73,14 @@ public class DataSeeder implements CommandLineRunner {
 		this.liteLlmPricingClient = liteLlmPricingClient;
 		this.usageService = usageService;
 		this.passwordEncoder = passwordEncoder;
+	}
+
+	private ModelPrice currentPrice(ModelPrice fallback) {
+		try {
+			return liteLlmPricingClient.fetchPrice(fallback.model()).orElse(fallback);
+		} catch (PricingCatalogUnavailableException e) {
+			return fallback;
+		}
 	}
 
 	@Override
@@ -105,9 +117,11 @@ public class DataSeeder implements CommandLineRunner {
 		Instant pricingValidFrom = Instant.now().minus(Duration.ofDays(365));
 		List<String> models = new ArrayList<>();
 		for (ModelPrice fallback : FALLBACK_PRICES) {
-			ModelPrice price = liteLlmPricingClient.fetchPrice(fallback.model()).orElse(fallback);
+			ModelPrice price = currentPrice(fallback);
 			modelPricingRepository.save(new ModelPricing(price.model(),
-					price.inputPricePer1k(), price.outputPricePer1k(), pricingValidFrom, null));
+					price.inputPricePer1k(), price.outputPricePer1k(),
+					price.cacheReadPricePer1k(), price.cacheCreationPricePer1k(),
+					pricingValidFrom, null));
 			models.add(price.model());
 		}
 

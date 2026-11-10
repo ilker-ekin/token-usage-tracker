@@ -33,11 +33,20 @@ public class UsageEvent extends BaseEntity {
 	@Column(nullable = false)
 	private String model;
 
+	/** Uncached input only; cache reads and writes are counted separately. */
 	@Column(name = "input_tokens", nullable = false)
 	private int inputTokens;
 
 	@Column(name = "output_tokens", nullable = false)
 	private int outputTokens;
+
+	/** Tokens served from the provider's prompt cache. */
+	@Column(name = "cache_read_tokens", nullable = false)
+	private int cacheReadTokens;
+
+	/** Tokens written to the provider's prompt cache. */
+	@Column(name = "cache_creation_tokens", nullable = false)
+	private int cacheCreationTokens;
 
 	@Column(name = "lines_added")
 	private Integer linesAdded;
@@ -51,9 +60,13 @@ public class UsageEvent extends BaseEntity {
 	@Column(name = "event_time", nullable = false)
 	private Instant eventTime;
 
+	/** Client-supplied retry key, unique per org; null when the client sent none. */
+	@Column(name = "idempotency_key")
+	private String idempotencyKey;
+
 	public UsageEvent(UUID orgId, UUID teamId, UUID memberId, UUID projectId, String model,
-			int inputTokens, int outputTokens, Integer linesAdded, Integer linesRemoved,
-			BigDecimal costUsd, Instant eventTime) {
+			int inputTokens, int outputTokens, int cacheReadTokens, int cacheCreationTokens,
+			Integer linesAdded, Integer linesRemoved, BigDecimal costUsd, Instant eventTime) {
 		this.orgId = orgId;
 		this.teamId = teamId;
 		this.memberId = memberId;
@@ -61,6 +74,8 @@ public class UsageEvent extends BaseEntity {
 		this.model = model;
 		this.inputTokens = inputTokens;
 		this.outputTokens = outputTokens;
+		this.cacheReadTokens = cacheReadTokens;
+		this.cacheCreationTokens = cacheCreationTokens;
 		this.linesAdded = linesAdded;
 		this.linesRemoved = linesRemoved;
 		this.costUsd = costUsd;

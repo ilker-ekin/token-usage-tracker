@@ -4,7 +4,7 @@ import dev.ekin.tokenusage.pricing.LiteLlmPricingClient.ModelPrice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -29,10 +29,13 @@ public class PricingService {
 	private final ModelPricingRepository modelPricingRepository;
 	private final LiteLlmPricingClient liteLlmPricingClient;
 
+	private final TransactionTemplate transactionTemplate;
+
 	public PricingService(ModelPricingRepository modelPricingRepository,
-			LiteLlmPricingClient liteLlmPricingClient) {
+			LiteLlmPricingClient liteLlmPricingClient, TransactionTemplate transactionTemplate) {
 		this.modelPricingRepository = modelPricingRepository;
 		this.liteLlmPricingClient = liteLlmPricingClient;
+		this.transactionTemplate = transactionTemplate;
 	}
 
 	/**
@@ -41,8 +44,17 @@ public class PricingService {
 	 * and a model with no row at all is looked up in LiteLLM's catalog and
 	 * persisted — usage of a newly released model books without an admin
 	 * having to add its price first.
+	 *
+	 * <p>Deliberately not transactional, and callers must not hold a
+	 * transaction either: the catalog lookup is a network call, and a slow
+	 * response must not keep a database connection and its locks waiting.
+	 * The local lookups and the insert each run in their own short transaction.
+	 *
+	 * @throws PricingNotFoundException when neither the table nor the catalog
+	 *         knows the model
+	 * @throws PricingCatalogUnavailableException when the model is not in the
+	 *         table and the catalog cannot be read
 	 */
-	@Transactional
 	public ModelPricing findActivePricing(String model, Instant at) {
 		Optional<ModelPricing> exact = firstActive(model, at);
 		if (exact.isPresent()) {
@@ -57,33 +69,61 @@ public class PricingService {
 			}
 		}
 
-		return fetchAndPersist(model)
-				.or(() -> dated.matches() ? fetchAndPersist(dated.group(1)) : Optional.empty())
+		ModelPrice price = liteLlmPricingClient.fetchPrice(model)
+				.or(() -> dated.matches()
+						? liteLlmPricingClient.fetchPrice(dated.group(1)) : Optional.empty())
 				.orElseThrow(() -> new PricingNotFoundException(model, at));
+		return persistAutoCreated(price, at);
 	}
 
 	private Optional<ModelPricing> firstActive(String model, Instant at) {
 		return modelPricingRepository.findActiveAt(model, at).stream().findFirst();
 	}
 
-	private Optional<ModelPricing> fetchAndPersist(String model) {
-		Optional<ModelPrice> price = liteLlmPricingClient.fetchPrice(model);
-		if (price.isEmpty()) {
-			return Optional.empty();
-		}
-		ModelPrice p = price.get();
-		log.info("Auto-created pricing for {} from LiteLLM catalog: in={}/1k out={}/1k",
-				p.model(), p.inputPricePer1k(), p.outputPricePer1k());
-		return Optional.of(modelPricingRepository.save(new ModelPricing(
-				p.model(), p.inputPricePer1k(), p.outputPricePer1k(), Instant.EPOCH, null)));
+	/**
+	 * Requests that miss the same new model at once all reach this point.
+	 * The advisory lock lets one of them insert; the others then find its row.
+	 */
+	private ModelPricing persistAutoCreated(ModelPrice p, Instant at) {
+		return transactionTemplate.execute(status -> {
+			modelPricingRepository.lockModel(p.model());
+			return firstActive(p.model(), at).orElseGet(() -> insertAutoCreated(p));
+		});
 	}
 
+	private ModelPricing insertAutoCreated(ModelPrice p) {
+		log.info("Auto-created pricing for {} from LiteLLM catalog: in={}/1k out={}/1k "
+						+ "cacheRead={}/1k cacheCreation={}/1k",
+				p.model(), p.inputPricePer1k(), p.outputPricePer1k(),
+				p.cacheReadPricePer1k(), p.cacheCreationPricePer1k());
+		return modelPricingRepository.save(new ModelPricing(
+				p.model(), p.inputPricePer1k(), p.outputPricePer1k(),
+				p.cacheReadPricePer1k(), p.cacheCreationPricePer1k(), Instant.EPOCH, null));
+	}
+
+	/** Cost of an event without prompt caching. */
 	public BigDecimal computeCost(ModelPricing pricing, int inputTokens, int outputTokens) {
-		BigDecimal inputCost = pricing.getInputPricePer1k()
-				.multiply(BigDecimal.valueOf(inputTokens));
-		BigDecimal outputCost = pricing.getOutputPricePer1k()
-				.multiply(BigDecimal.valueOf(outputTokens));
-		return inputCost.add(outputCost)
+		return computeCost(pricing, inputTokens, outputTokens, 0, 0);
+	}
+
+	/**
+	 * Sums the four token classes at their own prices and rounds once at the
+	 * end. {@code inputTokens} is uncached input only. A pricing row without a
+	 * cache price charges those tokens at the input price: that is what the
+	 * tracker booked before cache prices existed, and it never under-bills.
+	 */
+	public BigDecimal computeCost(ModelPricing pricing, int inputTokens, int outputTokens,
+			int cacheReadTokens, int cacheCreationTokens) {
+		BigDecimal inputPrice = pricing.getInputPricePer1k();
+		BigDecimal cacheReadPrice = pricing.getCacheReadPricePer1k() != null
+				? pricing.getCacheReadPricePer1k() : inputPrice;
+		BigDecimal cacheCreationPrice = pricing.getCacheCreationPricePer1k() != null
+				? pricing.getCacheCreationPricePer1k() : inputPrice;
+
+		return inputPrice.multiply(BigDecimal.valueOf(inputTokens))
+				.add(pricing.getOutputPricePer1k().multiply(BigDecimal.valueOf(outputTokens)))
+				.add(cacheReadPrice.multiply(BigDecimal.valueOf(cacheReadTokens)))
+				.add(cacheCreationPrice.multiply(BigDecimal.valueOf(cacheCreationTokens)))
 				.divide(ONE_THOUSAND, COST_SCALE, RoundingMode.HALF_UP);
 	}
 

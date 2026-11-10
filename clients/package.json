@@ -8,6 +8,6 @@
     "verify": "node --env-file-if-exists=.env verify-costs.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0"
+    "@anthropic-ai/sdk": "^1.6.0"
   }
 }
