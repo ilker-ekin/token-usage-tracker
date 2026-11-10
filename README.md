@@ -1,8 +1,8 @@
 # Token Usage Tracker
 
-[![CI](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml)
+[![CI](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ilker-ekin/token-usage-tracker/actions/workflows/ci.yml)
 
-Track how much your team spends on LLM API calls. Applications report their token usage after each call; the tracker prices every event, aggregates the numbers, and shows spend per organization, team, project, and member on a web dashboard.
+Track how much your team spends on LLM API calls. Applications report their token usage after each call; the tracker prices every event, aggregates the numbers, shows spend per organization, team, project, model and member on a web dashboard, and warns a webhook when a project or team nears its monthly budget.
 
 ## How it works
 
@@ -24,8 +24,9 @@ Track how much your team spends on LLM API calls. Applications report their toke
 
 1. An application makes an LLM call and reads the token counts from the response.
 2. It reports them to `POST /usage`. The tracker looks up the model's price **at that moment** and stores the event with its cost — so later price changes never rewrite history.
-3. Daily, weekly, and monthly summary rows (rollups, one table with a granularity column) are updated in the same transaction.
+3. Daily, weekly, and monthly summary rows (rollups: one table, keyed by granularity and model) are updated in the same transaction.
 4. The dashboard reads those summaries through a short-lived Redis cache.
+5. Once a minute, a job compares each budget with its month-to-date spend and queues a webhook alert at 80% and 100%.
 
 ## Tech stack
 
@@ -34,9 +35,10 @@ Track how much your team spends on LLM API calls. Applications report their toke
 | API | Java 21, Spring Boot 4.1, Maven |
 | Database | PostgreSQL (Flyway migrations) |
 | Cache | Redis |
-| Auth | JWT (email + password login) |
-| Dashboard | React + Vite + TypeScript (`ui/`) |
+| Auth | JWT (email + password login); an HttpOnly cookie for the dashboard, Bearer for scripts |
+| Dashboard | React 19, React Router 7, Recharts, Vite 8, TypeScript (`ui/`) |
 | Tests | JUnit + Testcontainers (real Postgres/Redis in Docker) |
+| CI | GitHub Actions; Dependabot for Maven, npm, Actions and Docker |
 
 ## Getting started
 
@@ -73,7 +75,21 @@ Open http://localhost:5173 and log in:
 | `member1@acme.dev` | `seed-password` | Admin |
 | `member2@acme.dev` … `member10@acme.dev` | `seed-password` | Member |
 
-You should see 30 days of demo spend across the Overview, Trends, Members, Projects, and Teams pages (on port 3000 for the Docker quick start). Click a project for its model breakdown and raw events. Admins also get Budgets (at `/admin/budgets`). The date range lives in the URL, so any view can be bookmarked or shared.
+You should see 30 days of demo spend (on port 3000 for the Docker quick start).
+
+### The dashboard
+
+| Page | What it shows |
+|---|---|
+| Overview | KPI cards with change against the previous period, daily spend, spend by model, budgets at risk (admins only) |
+| Trends | Daily series for the range, with the previous period overlaid |
+| Members, Teams, Projects | Ranked tables; a project opens its drill-down (`/projects/<id>`) with a model breakdown and filterable, paginated raw events |
+| Budgets (admins, `/admin/budgets`) | Budgets with month-to-date spend, a create/edit dialog that shows the API's field errors, and each budget's alert history |
+
+- The date range (`?range=7d|30d|mtd|custom`, `from`, `to`, `compare=0`) lives in the URL, so any view can be bookmarked or shared.
+- Every page has loading, error (with retry) and empty states. Tables export to CSV; the project page exports every event in the range, up to 20,000.
+- If the session expires, a dialog signs you in again without leaving the page, and the open view reloads its data.
+- The screens were designed in Figma first. The layout is desktop-first and has been checked in Chrome only.
 
 ## API overview
 
@@ -82,9 +98,9 @@ All endpoints require authentication except login, logout and health. Programmat
 | Endpoint | What it does |
 |---|---|
 | `POST /auth/token` | Log in — returns a JWT |
+| `POST /auth/logout` | Clear the dashboard session cookie |
 | `GET /auth/me` | Who am I (from the token) |
 | `GET /analytics/directory` | Every project, team and member of the org, for pickers and filters |
-| `POST /auth/logout` | Clear the dashboard session cookie |
 | `POST /usage` | Report a usage event (tokens in/out, cache tokens, model, project) |
 | `GET /usage` | Browse raw events, filterable by member, project, model and time, paginated |
 | `GET /analytics/projects` | Spend per project for a date range |
@@ -168,7 +184,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 **Cost is snapshotted at ingest.** Each event stores the cost computed from the price that was valid at `eventTime`. Prices are versioned (`valid_from` / `valid_to`), so adding a new price never changes what past usage cost. Unknown models are priced once from LiteLLM's catalog and persisted. That lookup is a network call, so it runs before the ingest transaction starts, with a 2 s connect and 5 s read timeout, and the downloaded catalog is reused for 10 minutes. A slow or failing catalog never holds a database connection.
 
-**Rollups are written in the ingest transaction and recomputed nightly.** The dashboard never aggregates raw events. It sums pre-aggregated daily rows, and an event and its rollups commit together or not at all. A 02:30 UTC job rebuilds the last two days (plus their weeks and months) from `usage_event`, the source of truth, as a safety net.
+**Rollups are written in the ingest transaction and recomputed nightly.** The dashboard never aggregates raw events. It sums pre-aggregated rows (one table, with a `granularity` of day, week or month and the model in the key), and an event and its rollups commit together or not at all. A 02:30 UTC job rebuilds the last two days (plus their weeks and months) from `usage_event`, the source of truth, as a safety net.
 
 **Concurrency is handled with upserts.** An ingest writes its day, week and month rollup rows with one three-row `INSERT … ON CONFLICT DO UPDATE SET total = total + EXCLUDED.total`, so parallel ingests for the same member, project and day can't collide on insert or lose an increment. It's backed by a test that fires 50 ingests at once. The unique key is `NULLS NOT DISTINCT` because `team_id` is nullable. With a plain `UNIQUE`, members without a team got one row per event. The nightly job takes a `SHARE ROW EXCLUSIVE` table lock, so ingests queue for its few seconds instead of racing its delete-and-rebuild.
 
@@ -188,6 +204,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 - **The recompute window is fixed at two days.** Events arriving later still update their rollups at ingest, but the nightly rebuild won't re-check them. The recompute query also filters `usage_event` on `event_time` alone, so it needs its own index, or monthly partitioning, as the table grows.
 - **The recompute job blocks ingest briefly.** While it runs, ingest requests wait on its table lock (seconds at this data size). At larger scale it should rebuild into a staging table and swap, or recompute per org.
 - **Cache version keys have no TTL.** That's one tiny key per org. If Redis evicted one under memory pressure, stale entries could be served until their 5-minute TTL expired.
+- **The dashboard has only been run in Chrome, at desktop width.** There are no narrow-screen layouts, and the loading states have not been checked in other browsers. The chart library (Recharts 2) is on its last maintained major version.
 - **JWT claims live for the whole token lifetime.** A member moved to another org keeps the old org in their token for up to `JWT_TTL`, and there's no revocation list.
 
 ## Running the tests
@@ -197,7 +214,7 @@ cd token-usage-tracker
 ./mvnw test
 ```
 
-Docker must be running — the tests start their own throwaway Postgres and Redis containers, so nothing you run locally is touched. Beyond the endpoint tests, the suite includes concurrency tests (parallel ingests and ingests racing the nightly job), cross-org isolation tests, and a run with Redis unreachable. The same suite runs in CI on every pull request, and merging is blocked until it passes.
+Docker must be running — the tests start their own throwaway Postgres and Redis containers, so nothing you run locally is touched. Beyond the endpoint tests, the suite includes concurrency tests (parallel ingests and ingests racing the nightly job), cross-org isolation tests, and a run with Redis unreachable. The same suite runs in CI on every pull request, together with the dashboard's type-check and build (`cd ui && npm run build`), and merging is blocked until both checks pass. A `changes` job looks at which files a pull request touches, so a UI-only change skips the backend tests and a backend-only change skips the UI build. A skipped check still counts as passing.
 
 ## Configuration
 
@@ -210,18 +227,27 @@ Everything is configured through environment variables (sensible localhost defau
 | `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | |
 | `JWT_SECRET` | dev-only fallback | **Required in production** — the app refuses to start without it outside the `dev` profile |
 | `JWT_TTL` | `PT12H` | Token lifetime |
+| `AUTH_COOKIE_SECURE` | `true` (`false` in the `dev` profile and `docker-compose.yml`) | Set `false` only when serving the dashboard over plain HTTP |
+| `LOGIN_MAX_FAILURES_PER_EMAIL` / `LOGIN_MAX_FAILURES_PER_IP` / `LOGIN_FAILURE_WINDOW` | `5` / `20` / `PT15M` | Login rate limit |
+| `INGEST_MAX_FUTURE` / `INGEST_MAX_EVENT_AGE` | `PT5M` / `P90D` | Accepted `eventTime` window |
+| `BUDGET_EVALUATION_INTERVAL` | `PT1M` | How often budgets are checked |
+| `BUDGET_ALLOW_INSECURE_WEBHOOK_URLS` | `false` | Local development only |
+| `LITELLM_PRICING_URL` | LiteLLM's public catalog | Source for unknown-model prices |
 
 ## Project layout
 
 ```
 token-usage-tracker/   Spring Boot API (src/main/java/dev/ekin/tokenusage)
-  ├─ auth/             JWT login, token filter
+  ├─ auth/             JWT login, session cookie, rate limiter, token filter
   ├─ usage/            Event ingestion + drill-down
   ├─ pricing/          Model prices, cost calculation
-  ├─ analytics/        Rollups, aggregate queries, Redis cache
+  ├─ analytics/        Rollups, aggregate queries, directory, Redis cache
   ├─ budget/           Monthly spend caps, threshold alerts, webhook delivery
   └─ tenant/           Organizations, teams, members, projects
 ui/                    React admin dashboard (+ nginx image for the Docker demo)
+  ├─ src/pages/        One file per screen
+  ├─ src/components/   Layout, KPI card, chart, table, dialogs
+  └─ src/api.ts        Typed API client; src/dateRange.tsx keeps the range in the URL
 clients/               Example CLI that calls Claude and reports usage
 docker-compose.yml     Full demo stack: API, UI, PostgreSQL, Redis
 ```
