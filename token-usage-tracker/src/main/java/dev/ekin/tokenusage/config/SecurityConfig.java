@@ -2,6 +2,7 @@ package dev.ekin.tokenusage.config;
 
 import dev.ekin.tokenusage.auth.JwtAuthenticationFilter;
 import dev.ekin.tokenusage.auth.LoginRateLimitProperties;
+import dev.ekin.tokenusage.auth.SessionCookieProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,14 +17,16 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * Stateless JWT security: the health probe and the token endpoint are the
- * only public routes; everything else requires a valid Bearer token set by
- * {@link JwtAuthenticationFilter}.
+ * Stateless JWT security: the health probe, login and logout are the only
+ * public routes; everything else requires a valid token, from the Bearer
+ * header or the session cookie, set by {@link JwtAuthenticationFilter}.
+ * Spring's CSRF tokens are off because the filter applies its own header
+ * check to cookie-authenticated writes.
  */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
-@EnableConfigurationProperties(LoginRateLimitProperties.class)
+@EnableConfigurationProperties({LoginRateLimitProperties.class, SessionCookieProperties.class})
 public class SecurityConfig {
 
 	@Bean
@@ -34,7 +37,7 @@ public class SecurityConfig {
 				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.authorizeHttpRequests(auth -> auth
 						.requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
-						.requestMatchers(HttpMethod.POST, "/auth/token").permitAll()
+						.requestMatchers(HttpMethod.POST, "/auth/token", "/auth/logout").permitAll()
 						.anyRequest().authenticated())
 				.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
 				.exceptionHandling(ex -> ex.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)));
