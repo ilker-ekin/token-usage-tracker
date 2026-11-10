@@ -91,6 +91,11 @@ All endpoints require a `Authorization: Bearer <token>` header except login and 
 | `GET /analytics/daily` | Day-by-day time series |
 | `POST /model-pricing` | Add a model price (admin only) |
 | `GET /model-pricing` | List model prices |
+| `POST /budgets` | Create a monthly spend cap for a project or team (admin only) |
+| `GET /budgets` | List budgets with month-to-date spend (admin only) |
+| `PUT /budgets/{id}` | Change limit, webhook URL or enabled flag (admin only) |
+| `DELETE /budgets/{id}` | Delete a budget and its alert history (admin only) |
+| `GET /budgets/{id}/alerts` | Alerts raised for a budget and their delivery status (admin only) |
 
 Example — report an event:
 
@@ -116,6 +121,29 @@ Send an optional `Idempotency-Key` header (1 to 255 characters, unique per org) 
 Model prices are seeded from [LiteLLM's public catalog](https://github.com/BerriAI/litellm); unknown models are priced from the same catalog automatically on first use.
 
 Ingest rejects events that cannot be real with a `400` naming the field: more than 100,000,000 tokens or 10,000,000 lines in one event, a model id over 100 characters, an `eventTime` more than 5 minutes ahead of the server or older than 90 days (`INGEST_MAX_FUTURE`, `INGEST_MAX_EVENT_AGE`). An unknown model is a `422`. If the model is unknown and the catalog cannot be reached within its timeout, the answer is a `503`: retry the same request later.
+
+### Budgets and alerts
+
+A budget caps what one project or one team may spend in a calendar month (UTC):
+
+```bash
+curl -X POST http://localhost:8080/budgets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"scopeType":"PROJECT","scopeId":"<project uuid>","monthlyLimitUsd":500,"webhookUrl":"https://example.com/hooks/budget"}'
+```
+
+Once a minute the tracker compares each enabled budget with its month-to-date spend. When spend reaches 80% and again at 100% of the limit, it POSTs this JSON to the budget's webhook, once per threshold per month:
+
+```json
+{"alertId":"<uuid>","budgetId":"<uuid>","scopeType":"PROJECT","scopeId":"<uuid>","periodStart":"2026-11-01","thresholdPct":80,"spendUsd":412.37,"limitUsd":500.00}
+```
+
+- Any 2xx answer counts as delivered. Anything else is retried on the next run, up to 5 attempts, then the alert is marked `FAILED`.
+- Delivery is at-least-once; use `alertId` to drop a repeat.
+- Webhook URLs must be `https` and must not resolve to a private, loopback or link-local address. Redirects are not followed. Set `BUDGET_ALLOW_INSECURE_WEBHOOK_URLS=true` for local development only.
+- A team budget counts events by the team the member was in when the event was ingested. Spend by members without a team counts toward no team budget.
+- Alerts only notify. Ingest is never blocked by a budget.
 
 ## Try it with real Claude calls (optional)
 
@@ -146,6 +174,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 ## Limitations / next steps
 
+- **Budget alerts are unsigned and coarse.** Webhook requests carry no signature, so a receiver cannot prove they came from the tracker. Thresholds are fixed at 80% and 100%, the period is always a calendar month, and changing a limit mid-month does not retract or re-send alerts already raised for that month.
 - **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
 - **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
 - **Idempotency keys never expire and replays are not compared.** A key stays reserved in its org for as long as the event exists, and a repeat with a different body silently returns the original event instead of a `409`.
@@ -184,6 +213,7 @@ token-usage-tracker/   Spring Boot API (src/main/java/dev/ekin/tokenusage)
   ├─ usage/            Event ingestion + drill-down
   ├─ pricing/          Model prices, cost calculation
   ├─ analytics/        Rollups, aggregate queries, Redis cache
+  ├─ budget/           Monthly spend caps, threshold alerts, webhook delivery
   └─ tenant/           Organizations, teams, members, projects
 ui/                    React admin dashboard (+ nginx image for the Docker demo)
 clients/               Example CLI that calls Claude and reports usage
