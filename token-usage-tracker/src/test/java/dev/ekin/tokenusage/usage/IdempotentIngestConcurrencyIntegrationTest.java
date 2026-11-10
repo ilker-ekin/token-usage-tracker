@@ -1,11 +1,9 @@
 package dev.ekin.tokenusage.usage;
 
 import dev.ekin.tokenusage.TestcontainersConfiguration;
-import dev.ekin.tokenusage.analytics.DailyRollup;
-import dev.ekin.tokenusage.analytics.DailyRollupRepository;
-import dev.ekin.tokenusage.analytics.MonthlyRollupRepository;
-import dev.ekin.tokenusage.analytics.RollupBase;
-import dev.ekin.tokenusage.analytics.WeeklyRollupRepository;
+import dev.ekin.tokenusage.analytics.Granularity;
+import dev.ekin.tokenusage.analytics.Rollup;
+import dev.ekin.tokenusage.analytics.RollupRepository;
 import dev.ekin.tokenusage.pricing.ModelPricing;
 import dev.ekin.tokenusage.pricing.ModelPricingRepository;
 import dev.ekin.tokenusage.tenant.Member;
@@ -63,20 +61,14 @@ class IdempotentIngestConcurrencyIntegrationTest {
 	@Autowired
 	UsageEventRepository usageEventRepository;
 	@Autowired
-	DailyRollupRepository dailyRollupRepository;
-	@Autowired
-	WeeklyRollupRepository weeklyRollupRepository;
-	@Autowired
-	MonthlyRollupRepository monthlyRollupRepository;
+	RollupRepository rollupRepository;
 
 	Member member;
 	Project project;
 
 	@BeforeEach
 	void setUp() {
-		dailyRollupRepository.deleteAll();
-		weeklyRollupRepository.deleteAll();
-		monthlyRollupRepository.deleteAll();
+		rollupRepository.deleteAll();
 		usageEventRepository.deleteAll();
 		modelPricingRepository.deleteAll();
 		memberRepository.deleteAll();
@@ -102,11 +94,11 @@ class IdempotentIngestConcurrencyIntegrationTest {
 		assertThat(results.stream().map(r -> r.event().getId()).distinct()).hasSize(1);
 
 		assertThat(usageEventRepository.count()).isEqualTo(1);
-		List<DailyRollup> daily = dailyRollupRepository.findAll();
+		List<Rollup> daily = rollupRepository.findByGranularity(Granularity.DAY);
 		assertThat(daily).hasSize(1);
 		assertOneEvent(daily.getFirst());
-		assertThat(weeklyRollupRepository.findAll()).hasSize(1).allSatisfy(this::assertOneEvent);
-		assertThat(monthlyRollupRepository.findAll()).hasSize(1).allSatisfy(this::assertOneEvent);
+		assertThat(rollupRepository.findByGranularity(Granularity.WEEK)).hasSize(1).allSatisfy(this::assertOneEvent);
+		assertThat(rollupRepository.findByGranularity(Granularity.MONTH)).hasSize(1).allSatisfy(this::assertOneEvent);
 	}
 
 	@Test
@@ -115,13 +107,13 @@ class IdempotentIngestConcurrencyIntegrationTest {
 
 		assertThat(results).hasSize(REQUESTS).allMatch(IngestResult::created);
 		assertThat(usageEventRepository.count()).isEqualTo(REQUESTS);
-		DailyRollup daily = dailyRollupRepository.findAll().getFirst();
+		Rollup daily = rollupRepository.findByGranularity(Granularity.DAY).getFirst();
 		assertThat(daily.getTotalInputTokens()).isEqualTo(1000L * REQUESTS);
 		assertThat(daily.getTotalCostUsd()).isEqualByComparingTo(
 				new BigDecimal("0.033").multiply(BigDecimal.valueOf(REQUESTS)));
 	}
 
-	private void assertOneEvent(RollupBase r) {
+	private void assertOneEvent(Rollup r) {
 		assertThat(r.getTotalInputTokens()).isEqualTo(1000);
 		assertThat(r.getTotalOutputTokens()).isEqualTo(2000);
 		assertThat(r.getTotalCostUsd()).isEqualByComparingTo("0.033");

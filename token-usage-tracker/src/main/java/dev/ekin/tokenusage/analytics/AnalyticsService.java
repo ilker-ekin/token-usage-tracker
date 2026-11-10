@@ -13,13 +13,13 @@ import java.util.UUID;
 @Service
 public class AnalyticsService {
 
-	private final DailyRollupRepository dailyRollupRepository;
+	private final RollupRepository rollupRepository;
 	private final MemberRepository memberRepository;
 	private final AnalyticsCacheService cache;
 
-	public AnalyticsService(DailyRollupRepository dailyRollupRepository,
+	public AnalyticsService(RollupRepository rollupRepository,
 			MemberRepository memberRepository, AnalyticsCacheService cache) {
-		this.dailyRollupRepository = dailyRollupRepository;
+		this.rollupRepository = rollupRepository;
 		this.memberRepository = memberRepository;
 		this.cache = cache;
 	}
@@ -44,7 +44,7 @@ public class AnalyticsService {
 	@Transactional(readOnly = true)
 	public List<ProjectAnalytics> projects(UUID orgId, LocalDate from, LocalDate to) {
 		return cache.getOrLoad(orgId, "projects", from, to, ProjectAnalytics[].class, () -> {
-			List<ProjectAnalytics> result = dailyRollupRepository
+			List<ProjectAnalytics> result = rollupRepository
 					.aggregateByProject(orgId, from, to).stream()
 					.map(a -> new ProjectAnalytics(a.getProjectId(), a.getName(),
 							a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
@@ -57,7 +57,7 @@ public class AnalyticsService {
 	@Transactional(readOnly = true)
 	public List<MemberAnalytics> members(UUID orgId, LocalDate from, LocalDate to) {
 		return cache.getOrLoad(orgId, "members", from, to, MemberAnalytics[].class, () -> {
-			List<MemberAnalytics> result = dailyRollupRepository
+			List<MemberAnalytics> result = rollupRepository
 					.aggregateByMember(orgId, from, to).stream()
 					.map(a -> new MemberAnalytics(a.getMemberId(), a.getDisplayName(), a.getEmail(),
 							a.getInputTokens(), a.getOutputTokens(), a.getCostUsd(),
@@ -74,7 +74,7 @@ public class AnalyticsService {
 					.collect(java.util.stream.Collectors.toMap(
 							MemberRepository.TeamMemberCount::getTeamId,
 							MemberRepository.TeamMemberCount::getMemberCount));
-			List<TeamAnalytics> result = dailyRollupRepository
+			List<TeamAnalytics> result = rollupRepository
 					.aggregateByTeam(orgId, from, to).stream()
 					.map(a -> new TeamAnalytics(a.getTeamId(), a.getName(),
 							memberCounts.getOrDefault(a.getTeamId(), 0L),
@@ -87,7 +87,7 @@ public class AnalyticsService {
 	@Transactional(readOnly = true)
 	public List<DailyAnalytics> daily(UUID orgId, LocalDate from, LocalDate to) {
 		return cache.getOrLoad(orgId, "daily", from, to, DailyAnalytics[].class, () -> {
-			List<DailyAnalytics> result = dailyRollupRepository
+			List<DailyAnalytics> result = rollupRepository
 					.aggregateByDay(orgId, from, to).stream()
 					.map(a -> new DailyAnalytics(a.getDate(), a.getInputTokens(),
 							a.getOutputTokens(), a.getCostUsd()))
