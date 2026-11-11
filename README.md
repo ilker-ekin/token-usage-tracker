@@ -179,11 +179,11 @@ All endpoints require authentication except login, logout and health. Programmat
 | `GET /analytics/summary` | Totals for the range and for the previous range of equal length |
 | `POST /model-pricing` | Add a model price (admin only) |
 | `GET /model-pricing` | List model prices |
-| `POST /budgets` | Create a monthly spend cap for a project or team; the response carries its webhook signing secret, once (admin only) |
+| `POST /budgets` | Create a monthly spend cap for a project or team (admin only) |
 | `GET /budgets` | List budgets with month-to-date spend (admin only) |
 | `PUT /budgets/{id}` | Change limit, webhook URL or enabled flag (admin only) |
 | `DELETE /budgets/{id}` | Delete a budget and its alert history (admin only) |
-| `POST /budgets/{id}/secret` | Rotate the budget's webhook signing secret and return the new one (admin only) |
+| `POST /budgets/{id}/secret` | Rotate the budget's webhook signing secret and return the new one; `POST /budgets` returns the first (admin only) |
 | `GET /budgets/{id}/alerts` | Alerts raised for a budget and their delivery status (admin only) |
 
 Example — report an event:
