@@ -7,9 +7,11 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.net.http.HttpClient;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -25,6 +27,11 @@ import java.util.UUID;
  * before the outcome is recorded, the stale claim is picked up again and the
  * webhook is called a second time. The payload's {@code alertId} lets a
  * receiver drop the repeat.
+ *
+ * <p>Every request is signed with the budget's secret (see
+ * {@link WebhookSigner}): the body is serialised once, and those exact bytes
+ * are signed and sent. Retries keep the {@code webhook-id} and get a fresh
+ * timestamp and signature.
  */
 @Component
 public class BudgetAlertSender {
@@ -41,10 +48,12 @@ public class BudgetAlertSender {
 	private final TransactionTemplate transactionTemplate;
 	private final BudgetProperties properties;
 	private final RestClient restClient;
+	private final ObjectMapper objectMapper;
 
 	public BudgetAlertSender(BudgetAlertRepository budgetAlertRepository, BudgetRepository budgetRepository,
 			WebhookUrlValidator webhookUrlValidator, TransactionTemplate transactionTemplate,
-			BudgetProperties properties) {
+			BudgetProperties properties, ObjectMapper objectMapper) {
+		this.objectMapper = objectMapper;
 		this.budgetAlertRepository = budgetAlertRepository;
 		this.budgetRepository = budgetRepository;
 		this.webhookUrlValidator = webhookUrlValidator;
@@ -98,11 +107,18 @@ public class BudgetAlertSender {
 	private boolean post(Budget budget, BudgetAlert alert) {
 		try {
 			webhookUrlValidator.validate(budget.getWebhookUrl());
+			byte[] body = objectMapper.writeValueAsBytes(new AlertPayload(alert.getId(), budget.getId(),
+					budget.getScopeType(), budget.getScopeId(), alert.getPeriodStart(), alert.getThresholdPct(),
+					alert.getSpendUsd(), alert.getLimitUsd()));
+			String id = alert.getId().toString();
+			long timestamp = Instant.now().getEpochSecond();
 			restClient.post().uri(budget.getWebhookUrl())
 					.contentType(MediaType.APPLICATION_JSON)
-					.body(new AlertPayload(alert.getId(), budget.getId(), budget.getScopeType(),
-							budget.getScopeId(), alert.getPeriodStart(), alert.getThresholdPct(),
-							alert.getSpendUsd(), alert.getLimitUsd()))
+					.header(WebhookSigner.ID_HEADER, id)
+					.header(WebhookSigner.TIMESTAMP_HEADER, Long.toString(timestamp))
+					.header(WebhookSigner.SIGNATURE_HEADER,
+							WebhookSigner.sign(budget.getWebhookSecret(), id, timestamp, body))
+					.body(body)
 					.retrieve()
 					.toBodilessEntity();
 			return true;

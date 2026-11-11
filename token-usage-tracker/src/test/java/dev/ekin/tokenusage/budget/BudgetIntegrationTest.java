@@ -28,6 +28,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
@@ -37,8 +39,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -106,6 +111,8 @@ class BudgetIntegrationTest {
 
 	HttpServer webhookServer;
 	final List<String> webhookBodies = Collections.synchronizedList(new ArrayList<>());
+	/** The signature headers of each request, in the order received. */
+	final List<Map<String, String>> webhookHeaders = Collections.synchronizedList(new ArrayList<>());
 	volatile int webhookStatus = 200;
 	volatile long webhookDelayMillis;
 
@@ -127,6 +134,11 @@ class BudgetIntegrationTest {
 		webhookServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		webhookServer.createContext("/hook", exchange -> {
 			webhookBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+			Map<String, String> headers = new HashMap<>();
+			for (String name : List.of("webhook-id", "webhook-timestamp", "webhook-signature")) {
+				headers.put(name, exchange.getRequestHeaders().getFirst(name));
+			}
+			webhookHeaders.add(headers);
 			try {
 				Thread.sleep(webhookDelayMillis);
 			} catch (InterruptedException e) {
@@ -280,7 +292,11 @@ class BudgetIntegrationTest {
 				.andExpect(status().isNotFound());
 		mockMvc.perform(delete("/budgets/" + foreignBudget.getId()).header("Authorization", auth))
 				.andExpect(status().isNotFound());
+		mockMvc.perform(post("/budgets/" + foreignBudget.getId() + "/secret").header("Authorization", auth))
+				.andExpect(status().isNotFound());
 		assertThat(budgetRepository.findById(foreignBudget.getId())).isPresent();
+		assertThat(budgetRepository.findById(foreignBudget.getId()).orElseThrow().getWebhookSecret())
+				.as("another org's secret is unchanged").isEqualTo(foreignBudget.getWebhookSecret());
 	}
 
 	@Test
@@ -508,6 +524,101 @@ class BudgetIntegrationTest {
 				.andExpect(status().isNoContent());
 
 		assertThat(budgetAlertRepository.count()).isZero();
+	}
+
+	// ---- Signed deliveries (Standard Webhooks) ----
+
+	/**
+	 * Checks a delivery the way a receiver would, written independently of
+	 * WebhookSigner so the test does not just compare the signer with itself.
+	 */
+	private static boolean verifies(String secret, Map<String, String> headers, String body) throws Exception {
+		Mac mac = Mac.getInstance("HmacSHA256");
+		mac.init(new SecretKeySpec(Base64.getDecoder().decode(secret.substring("whsec_".length())), "HmacSHA256"));
+		String signed = headers.get("webhook-id") + "." + headers.get("webhook-timestamp") + "." + body;
+		String expected = "v1," + Base64.getEncoder().encodeToString(mac.doFinal(signed.getBytes(StandardCharsets.UTF_8)));
+		return expected.equals(headers.get("webhook-signature"));
+	}
+
+	@Test
+	void theSecretIsReturnedOnCreateOnlyAndSignsEveryDelivery() throws Exception {
+		String auth = token("admin@budget.dev");
+		String created = mockMvc.perform(post("/budgets").header("Authorization", auth)
+						.contentType("application/json").content(budgetJson("PROJECT", project.getId(), "100")))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.webhookSecret").isString())
+				.andReturn().getResponse().getContentAsString();
+		String secret = objectMapper.readValue(created, JsonNode.class).get("webhookSecret").asString();
+		assertThat(secret).startsWith("whsec_");
+
+		// Never in a listing
+		mockMvc.perform(get("/budgets").header("Authorization", auth))
+				.andExpect(jsonPath("$[0].id").exists())
+				.andExpect(jsonPath("$[0].webhookSecret").doesNotExist());
+
+		spend(admin, project, 85);
+		budgetEvaluationJob.run();
+
+		assertThat(webhookHeaders).hasSize(1);
+		Map<String, String> headers = webhookHeaders.getFirst();
+		String body = webhookBodies.getFirst();
+		String alertId = objectMapper.readValue(body, JsonNode.class).get("alertId").asString();
+		assertThat(headers.get("webhook-id")).isEqualTo(alertId);
+		assertThat(Long.parseLong(headers.get("webhook-timestamp")))
+				.isBetween(Instant.now().getEpochSecond() - 60, Instant.now().getEpochSecond() + 5);
+		assertThat(headers.get("webhook-signature")).startsWith("v1,");
+		assertThat(verifies(secret, headers, body)).isTrue();
+		assertThat(verifies(WebhookSigner.newSecret(), headers, body)).as("another secret").isFalse();
+		assertThat(verifies(secret, headers, body.replace("PROJECT", "TEAM"))).as("a changed body").isFalse();
+	}
+
+	@Test
+	void aRetryKeepsTheIdAndIsSignedAgain() throws Exception {
+		Budget budget = projectBudget("100");
+		String secret = budget.getWebhookSecret();
+		spend(admin, project, 85);
+		budgetEvaluationJob.evaluate();
+
+		webhookStatus = 500;
+		budgetAlertSender.sendPending();
+		webhookStatus = 200;
+		budgetAlertSender.sendPending();
+
+		assertThat(webhookHeaders).hasSize(2);
+		assertThat(webhookHeaders.get(1).get("webhook-id")).isEqualTo(webhookHeaders.get(0).get("webhook-id"));
+		assertThat(verifies(secret, webhookHeaders.get(0), webhookBodies.get(0))).isTrue();
+		assertThat(verifies(secret, webhookHeaders.get(1), webhookBodies.get(1))).isTrue();
+	}
+
+	@Test
+	void rotatingTheSecretSignsLaterDeliveriesWithTheNewOne() throws Exception {
+		Budget budget = projectBudget("100");
+		String oldSecret = budget.getWebhookSecret();
+		String auth = token("admin@budget.dev");
+
+		String rotated = mockMvc.perform(post("/budgets/" + budget.getId() + "/secret").header("Authorization", auth))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString();
+		String newSecret = objectMapper.readValue(rotated, JsonNode.class).get("webhookSecret").asString();
+		assertThat(newSecret).startsWith("whsec_").isNotEqualTo(oldSecret);
+
+		spend(admin, project, 85);
+		budgetEvaluationJob.run();
+
+		assertThat(verifies(newSecret, webhookHeaders.getFirst(), webhookBodies.getFirst())).isTrue();
+		assertThat(verifies(oldSecret, webhookHeaders.getFirst(), webhookBodies.getFirst())).isFalse();
+	}
+
+	@Test
+	void onlyThisOrgsAdminsCanRotateASecret() throws Exception {
+		Budget budget = projectBudget("100");
+
+		mockMvc.perform(post("/budgets/" + budget.getId() + "/secret").header("Authorization", token("solo@budget.dev")))
+				.andExpect(status().isForbidden());
+		mockMvc.perform(post("/budgets/" + UUID.randomUUID() + "/secret").header("Authorization", token("admin@budget.dev")))
+				.andExpect(status().isNotFound());
+		assertThat(budgetRepository.findById(budget.getId()).orElseThrow().getWebhookSecret())
+				.isEqualTo(budget.getWebhookSecret());
 	}
 
 }

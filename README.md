@@ -53,7 +53,7 @@
 - **Money is handled carefully.** `BigDecimal` end to end, one rounding step, and prices versioned by validity so history is stable.
 - **Concurrency is designed, not hoped for.** One `INSERT ... ON CONFLICT` upsert per ingest, advisory locks for first-time prices, `SKIP LOCKED` for the webhook outbox, and a test that fires 50 parallel ingests.
 - **Caching without stale reads.** Invalidation is a single Redis `INCR`, with no `KEYS` or `SCAN`, and Redis being down never fails a request.
-- **Security choices are explicit.** An HttpOnly cookie with a CSRF header instead of `localStorage`, rate-limited login that does not reveal which emails exist, and SSRF checks on webhook URLs.
+- **Security choices are explicit.** An HttpOnly cookie with a CSRF header instead of `localStorage`, rate-limited login that does not reveal which emails exist, SSRF checks on webhook URLs, and signed webhooks.
 - **Honest about its limits.** The [limitations list](#limitations--next-steps) says what is not done yet.
 
 Details for each of these are in [Design decisions](#design-decisions).
@@ -179,10 +179,11 @@ All endpoints require authentication except login, logout and health. Programmat
 | `GET /analytics/summary` | Totals for the range and for the previous range of equal length |
 | `POST /model-pricing` | Add a model price (admin only) |
 | `GET /model-pricing` | List model prices |
-| `POST /budgets` | Create a monthly spend cap for a project or team (admin only) |
+| `POST /budgets` | Create a monthly spend cap for a project or team; the response carries its webhook signing secret, once (admin only) |
 | `GET /budgets` | List budgets with month-to-date spend (admin only) |
 | `PUT /budgets/{id}` | Change limit, webhook URL or enabled flag (admin only) |
 | `DELETE /budgets/{id}` | Delete a budget and its alert history (admin only) |
+| `POST /budgets/{id}/secret` | Rotate the budget's webhook signing secret and return the new one (admin only) |
 | `GET /budgets/{id}/alerts` | Alerts raised for a budget and their delivery status (admin only) |
 
 Example — report an event:
@@ -227,8 +228,31 @@ Once a minute the tracker compares each enabled budget with its month-to-date sp
 {"alertId":"<uuid>","budgetId":"<uuid>","scopeType":"PROJECT","scopeId":"<uuid>","periodStart":"2026-11-01","thresholdPct":80,"spendUsd":412.37,"limitUsd":500.00}
 ```
 
+Every request is signed the [Standard Webhooks](https://www.standardwebhooks.com/) way, so any of its libraries can verify it:
+
+| Header | Value |
+|---|---|
+| `webhook-id` | The alert id. The same on every retry, so use it to drop repeats |
+| `webhook-timestamp` | Unix seconds of this attempt |
+| `webhook-signature` | `v1,` followed by the base64 HMAC-SHA256 of `id.timestamp.body`, keyed with the budget's secret |
+
+Each budget has its own secret (`whsec_` plus the base64 of 32 random bytes). It is returned once, by `POST /budgets`, and again only when you rotate it with `POST /budgets/{id}/secret`; the old one then stops working at once. The dashboard shows it after creating or rotating. To verify a request in Node, using the raw body exactly as received:
+
+```js
+import crypto from "node:crypto";
+
+function verifyWebhook(secret, headers, rawBody) {
+  const key = Buffer.from(secret.slice("whsec_".length), "base64");
+  const signed = `${headers["webhook-id"]}.${headers["webhook-timestamp"]}.${rawBody}`;
+  const expected = "v1," + crypto.createHmac("sha256", key).update(signed).digest("base64");
+  const fresh = Math.abs(Date.now() / 1000 - Number(headers["webhook-timestamp"])) < 300; // rejects replays
+  const given = Buffer.from(headers["webhook-signature"] ?? "");
+  return fresh && given.length === expected.length && crypto.timingSafeEqual(given, Buffer.from(expected));
+}
+```
+
 - Any 2xx answer counts as delivered. Anything else is retried on the next run, up to 5 attempts, then the alert is marked `FAILED`.
-- Delivery is at-least-once; use `alertId` to drop a repeat.
+- Delivery is at-least-once; use `webhook-id` (the same as `alertId` in the body) to drop a repeat.
 - Webhook URLs must be `https` and must not resolve to a private, loopback or link-local address. Redirects are not followed. Set `BUDGET_ALLOW_INSECURE_WEBHOOK_URLS=true` for local development only.
 - A team budget counts events by the team the member was in when the event was ingested. Spend by members without a team counts toward no team budget.
 - Alerts only notify. Ingest is never blocked by a budget.
@@ -269,7 +293,7 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 <details>
 <summary>The honest list: 11 known limitations</summary>
 
-- **Budget alerts are unsigned and coarse.** Webhook requests carry no signature, so a receiver cannot prove they came from the tracker. Thresholds are fixed at 80% and 100%, the period is always a calendar month, and changing a limit mid-month does not retract or re-send alerts already raised for that month.
+- **Budget alerts are coarse.** Thresholds are fixed at 80% and 100%, the period is always a calendar month, and changing a limit mid-month does not retract or re-send alerts already raised for that month.
 - **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
 - **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
 - **Idempotency keys never expire and replays are not compared.** A key stays reserved in its org for as long as the event exists, and a repeat with a different body silently returns the original event instead of a `409`.

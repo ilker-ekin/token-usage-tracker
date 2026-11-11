@@ -12,6 +12,7 @@ import {
   fetchBudgetAlerts,
   fetchBudgets,
   fetchDirectory,
+  rotateBudgetSecret,
   updateBudget,
 } from "../api";
 import { fmtPct, fmtUsd } from "../format";
@@ -220,6 +221,9 @@ function BudgetDialog({
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+  /** A signing secret to show once: right after creating the budget or rotating its secret. */
+  const [secret, setSecret] = useState<{ value: string; reason: "created" | "rotated" } | null>(null);
 
   const selectedScopeId = scopeId || options[0]?.id || "";
 
@@ -235,9 +239,14 @@ function BudgetDialog({
     const input: BudgetInput = { scopeType, scopeId: selectedScopeId, monthlyLimitUsd: amount, webhookUrl: webhookUrl.trim(), enabled };
     setBusy(true);
     try {
-      if (existing) await updateBudget(existing.id, input);
-      else await createBudget(input);
-      onSaved();
+      if (existing) {
+        await updateBudget(existing.id, input);
+        onSaved();
+      } else {
+        const created = await createBudget(input);
+        if (created.webhookSecret) setSecret({ value: created.webhookSecret, reason: "created" });
+        else onSaved();
+      }
     } catch (err) {
       showError(err);
     } finally {
@@ -260,6 +269,20 @@ function BudgetDialog({
     }
   }
 
+  async function rotate() {
+    if (!existing) return;
+    setBusy(true);
+    try {
+      const { webhookSecret } = await rotateBudgetSecret(existing.id);
+      setSecret({ value: webhookSecret, reason: "rotated" });
+    } catch (err) {
+      showError(err);
+    } finally {
+      setBusy(false);
+      setConfirmRotate(false);
+    }
+  }
+
   async function remove() {
     if (!existing) return;
     setBusy(true);
@@ -276,6 +299,15 @@ function BudgetDialog({
     existing && Number(limit) > 0
       ? `Spend this month so far: ${fmtUsd(existing.currentSpendUsd)} (${fmtPct(existing.currentSpendUsd / Number(limit))} of this limit).`
       : undefined;
+
+  if (secret) {
+    // Closing in any way reloads the list, since the budget may be new
+    return (
+      <Dialog title={secret.reason === "created" ? "Budget created" : "New signing secret"} onClose={onSaved}>
+        <SecretReveal secret={secret.value} rotated={secret.reason === "rotated"} onDone={onSaved} />
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog title={existing ? "Edit budget" : "New budget"} onClose={onClose}>
@@ -339,6 +371,30 @@ function BudgetDialog({
             <span className="hint">Must be https and reachable from the internet.</span>
           )}
         </label>
+        {existing && (
+          <div className="secret-section">
+            <span className="label">Signing secret</span>
+            <span className="hint">
+              Every webhook request is signed with this budget's secret (Standard Webhooks headers). It is shown
+              only when it is created; rotate it to get a new one.
+            </span>
+            {confirmRotate ? (
+              <div className="row gap-8">
+                <span className="small">The current secret stops working at once. Rotate?</span>
+                <button type="button" className="btn btn-danger" onClick={rotate} disabled={busy}>
+                  Rotate
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => setConfirmRotate(false)}>
+                  Keep
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="btn btn-secondary" onClick={() => setConfirmRotate(true)}>
+                Rotate signing secret
+              </button>
+            )}
+          </div>
+        )}
         <label className="switch">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           <span className="track" aria-hidden="true" />
@@ -376,5 +432,39 @@ function BudgetDialog({
         </div>
       </form>
     </Dialog>
+  );
+}
+
+/** Shows a signing secret once, with a copy button. */
+function SecretReveal({ secret, rotated, onDone }: { secret: string; rotated: boolean; onDone: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+    } catch {
+      // Clipboard blocked: the secret is selectable in the box
+    }
+  }
+
+  return (
+    <div className="form">
+      <p className="muted">
+        {rotated ? "The old secret no longer works. " : ""}Webhook requests for this budget are signed with this
+        secret. Use it to verify the <code>webhook-signature</code> header. Store it now: it will not be shown again.
+      </p>
+      <code className="secret-box" aria-label="Signing secret">
+        {secret}
+      </code>
+      <div className="row space-between">
+        <button type="button" className="btn btn-secondary" onClick={copy}>
+          {copied ? "Copied" : "Copy secret"}
+        </button>
+        <button type="button" className="btn btn-primary" onClick={onDone}>
+          Done
+        </button>
+      </div>
+    </div>
   );
 }

@@ -206,9 +206,22 @@ describe("budgets", () => {
     expect(alerts.every((a) => a.status === "PENDING" && a.sentAt === null)).toBe(true);
   });
 
+  it("returns the signing secret on create only, and rotates it", async () => {
+    const created = await post(good);
+    expect(created.webhookSecret).toMatch(/^whsec_[A-Za-z0-9+/]{43}=$/);
+    const listed = (await handle<Budget[]>("/budgets")).find((b) => b.id === created.id)!;
+    expect(listed.webhookSecret).toBeUndefined();
+
+    const rotated = await handle<{ webhookSecret: string }>(`/budgets/${created.id}/secret`, { method: "POST" });
+    expect(rotated.webhookSecret).toMatch(/^whsec_/);
+    expect(rotated.webhookSecret).not.toBe(created.webhookSecret);
+    expect((await failure(handle("/budgets/nope/secret", { method: "POST" }))).status).toBe(404);
+  });
+
   it("is for admins only", async () => {
     setRole("member");
     expect((await failure(handle("/budgets"))).status).toBe(403);
+    expect((await failure(handle("/budgets/any/secret", { method: "POST" }))).status).toBe(403);
     const me = await handle<{ roles: string[] }>("/auth/me");
     expect(me.roles).toEqual(["MEMBER"]);
   });

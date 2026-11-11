@@ -1,6 +1,7 @@
 package dev.ekin.tokenusage.budget;
 
 import dev.ekin.tokenusage.auth.MemberPrincipal;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.ekin.tokenusage.budget.BudgetService.BudgetWithSpend;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
@@ -56,15 +57,31 @@ public class BudgetController {
 			@NotNull Boolean enabled) {
 	}
 
+	/**
+	 * {@code webhookSecret} is present only in the response that creates the
+	 * budget; listings and updates never include it.
+	 */
 	public record BudgetResponse(UUID id, BudgetScope scopeType, UUID scopeId, BigDecimal monthlyLimitUsd,
-			String webhookUrl, boolean enabled, BigDecimal currentSpendUsd, Instant createdAt) {
+			String webhookUrl, boolean enabled, BigDecimal currentSpendUsd, Instant createdAt,
+			@JsonInclude(JsonInclude.Include.NON_NULL) String webhookSecret) {
 
 		static BudgetResponse from(BudgetWithSpend b) {
+			return of(b, null);
+		}
+
+		static BudgetResponse created(BudgetWithSpend b) {
+			return of(b, b.budget().getWebhookSecret());
+		}
+
+		private static BudgetResponse of(BudgetWithSpend b, String secret) {
 			Budget budget = b.budget();
 			return new BudgetResponse(budget.getId(), budget.getScopeType(), budget.getScopeId(),
 					budget.getMonthlyLimitUsd(), budget.getWebhookUrl(), budget.isEnabled(),
-					b.currentSpendUsd(), budget.getCreatedAt());
+					b.currentSpendUsd(), budget.getCreatedAt(), secret);
 		}
+	}
+
+	public record SecretResponse(String webhookSecret) {
 	}
 
 	public record AlertResponse(UUID id, LocalDate periodStart, int thresholdPct, BigDecimal spendUsd,
@@ -80,7 +97,7 @@ public class BudgetController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public BudgetResponse create(@AuthenticationPrincipal MemberPrincipal principal,
 			@RequestBody @Validated CreateBudgetRequest request) {
-		return BudgetResponse.from(budgetService.create(principal.orgId(), request.scopeType(),
+		return BudgetResponse.created(budgetService.create(principal.orgId(), request.scopeType(),
 				request.scopeId(), request.monthlyLimitUsd(), request.webhookUrl(),
 				request.enabled() == null || request.enabled()));
 	}
@@ -101,6 +118,12 @@ public class BudgetController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@AuthenticationPrincipal MemberPrincipal principal, @PathVariable UUID id) {
 		budgetService.delete(principal.orgId(), id);
+	}
+
+	/** Rotates the budget's signing secret and returns the new one; this is the only way to see it again. */
+	@PostMapping("/{id}/secret")
+	public SecretResponse rotateSecret(@AuthenticationPrincipal MemberPrincipal principal, @PathVariable UUID id) {
+		return new SecretResponse(budgetService.rotateWebhookSecret(principal.orgId(), id));
 	}
 
 	@GetMapping("/{id}/alerts")
