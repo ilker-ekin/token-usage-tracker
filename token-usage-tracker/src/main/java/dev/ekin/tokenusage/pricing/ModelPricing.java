@@ -10,12 +10,20 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "model_pricing")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ModelPricing extends BaseEntity {
+
+	/**
+	 * The org this price applies to, or null for a global catalog row. Only
+	 * global rows are shared between tenants, and the API never writes one.
+	 */
+	@Column(name = "org_id")
+	private UUID orgId;
 
 	@Column(nullable = false)
 	private String model;
@@ -56,6 +64,20 @@ public class ModelPricing extends BaseEntity {
 		this.cacheCreationPricePer1k = cacheCreationPricePer1k;
 		this.validFrom = validFrom;
 		this.validTo = validTo;
+	}
+
+	/** A price that only {@code orgId}'s usage is charged at; it wins over the global row. */
+	public static ModelPricing orgOverride(UUID orgId, String model, BigDecimal inputPricePer1k,
+			BigDecimal outputPricePer1k, BigDecimal cacheReadPricePer1k, BigDecimal cacheCreationPricePer1k,
+			Instant validFrom, Instant validTo) {
+		ModelPricing p = new ModelPricing(model, inputPricePer1k, outputPricePer1k,
+				cacheReadPricePer1k, cacheCreationPricePer1k, validFrom, validTo);
+		p.orgId = orgId;
+		return p;
+	}
+
+	public boolean isGlobal() {
+		return orgId == null;
 	}
 
 }

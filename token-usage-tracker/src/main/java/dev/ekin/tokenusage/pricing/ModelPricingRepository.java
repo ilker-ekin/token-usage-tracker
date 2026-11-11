@@ -11,17 +11,38 @@ import java.util.UUID;
 public interface ModelPricingRepository extends JpaRepository<ModelPricing, UUID> {
 
 	/**
-	 * Pricing rows valid at the given instant, most recent first — overlapping
-	 * rows are resolved in favor of the latest valid_from.
+	 * Global catalog rows valid at the given instant, most recent first —
+	 * overlapping rows are resolved in favor of the latest valid_from.
 	 */
 	@Query("""
 			select p from ModelPricing p
-			where p.model = :model
+			where p.orgId is null
+			  and p.model = :model
 			  and p.validFrom <= :at
 			  and (p.validTo is null or p.validTo > :at)
 			order by p.validFrom desc
 			""")
-	List<ModelPricing> findActiveAt(@Param("model") String model, @Param("at") Instant at);
+	List<ModelPricing> findActiveGlobalAt(@Param("model") String model, @Param("at") Instant at);
+
+	/** One org's override rows valid at the given instant, most recent first. */
+	@Query("""
+			select p from ModelPricing p
+			where p.orgId = :orgId
+			  and p.model = :model
+			  and p.validFrom <= :at
+			  and (p.validTo is null or p.validTo > :at)
+			order by p.validFrom desc
+			""")
+	List<ModelPricing> findActiveForOrgAt(@Param("orgId") UUID orgId, @Param("model") String model,
+			@Param("at") Instant at);
+
+	/** What one org may see: the global rows and its own overrides, never another org's. */
+	@Query("""
+			select p from ModelPricing p
+			where p.orgId is null or p.orgId = :orgId
+			order by p.model, p.validFrom desc
+			""")
+	List<ModelPricing> findVisibleTo(@Param("orgId") UUID orgId);
 
 	/**
 	 * Serializes writers of one model's pricing until the surrounding

@@ -177,8 +177,8 @@ All endpoints require authentication except login, logout and health. Programmat
 | `GET /analytics/daily` | Day-by-day time series |
 | `GET /analytics/models` | Spend per model, optionally for one project (`projectId`) |
 | `GET /analytics/summary` | Totals for the range and for the previous range of equal length |
-| `POST /model-pricing` | Add a model price (admin only) |
-| `GET /model-pricing` | List model prices |
+| `POST /model-pricing` | Add a price override for your own org (admin only) |
+| `GET /model-pricing` | List the global prices and your org's overrides |
 | `POST /budgets` | Create a monthly spend cap for a project or team (admin only) |
 | `GET /budgets` | List budgets with month-to-date spend (admin only) |
 | `PUT /budgets/{id}` | Change limit, webhook URL or enabled flag (admin only) |
@@ -206,7 +206,7 @@ OpenAI's `prompt_tokens` already includes cached tokens, so subtract them or the
 
 Send an optional `Idempotency-Key` header (1 to 255 characters, unique per org) to make a retry safe. The first request returns `201`. A repeat with the same key returns `200` with the original event and books nothing: no second event, no rollup change. The body of a repeat is not compared with the original, so use a fresh key for every distinct event.
 
-Model prices are seeded from [LiteLLM's public catalog](https://github.com/BerriAI/litellm); unknown models are priced from the same catalog automatically on first use.
+Model prices are seeded from [LiteLLM's public catalog](https://github.com/BerriAI/litellm); unknown models are priced from the same catalog automatically on first use. Those are global prices that every org shares, and the API never writes one. A price an admin posts is an override for their own org only: it wins over the global row for that org's usage (exact model id first, then the undated alias) and changes nothing for any other org. `GET /model-pricing` marks each row `GLOBAL` or `ORG`.
 
 Ingest rejects events that cannot be real with a `400` naming the field: more than 100,000,000 tokens or 10,000,000 lines in one event, a model id over 100 characters, an `eventTime` more than 5 minutes ahead of the server or older than 90 days (`INGEST_MAX_FUTURE`, `INGEST_MAX_EVENT_AGE`). An unknown model is a `422`. If the model is unknown and the catalog cannot be reached within its timeout, the answer is a `503`: retry the same request later.
 
@@ -262,16 +262,15 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 
 **Login is rate limited in Redis.** `POST /auth/token` counts failed logins per email (5) and per client address (20) in a 15-minute window, then answers `429` with `Retry-After`; a successful login clears the email's counter. If Redis is down the limit is skipped rather than blocking every login. An unknown email costs the same bcrypt comparison as a wrong password, so response time doesn't reveal which emails have an account. The client address is taken from `X-Forwarded-For` only when the request comes from a private-network proxy such as the bundled nginx.
 
-**Tenant isolation comes from the token.** The org always comes from the JWT (or from the member row on ingest), never from request parameters. Every query is filtered by it. Ingest rejects a project from another org with the same 404 as an unknown project, so tenants can't probe each other's ids. Tests cover each endpoint against a second org's data.
+**Tenant isolation comes from the token.** The org always comes from the JWT (or from the member row on ingest), never from request parameters. Every query is filtered by it. Ingest rejects a project from another org with the same 404 as an unknown project, so tenants can't probe each other's ids. Prices follow the same rule: an admin's price is an override for their own org, so no tenant can change what another tenant's usage costs. Tests cover each endpoint against a second org's data.
 
 ## Limitations / next steps
 
 <details>
-<summary>The honest list: 11 known limitations</summary>
+<summary>The honest list: 10 known limitations</summary>
 
 - **Budget alerts are unsigned and coarse.** Webhook requests carry no signature, so a receiver cannot prove they came from the tracker. Thresholds are fixed at 80% and 100%, the period is always a calendar month, and changing a limit mid-month does not retract or re-send alerts already raised for that month.
 - **One cache-write rate per model.** Anthropic bills 1-hour cache writes at 2x input and 5-minute writes at 1.25x. The tracker stores a single cache-creation price (the 5-minute rate from LiteLLM), so 1-hour writes are under-billed. Costs booked before cache tokens were tracked separately are not recomputed.
-- **Model pricing is global.** `model_pricing` is shared by all orgs, and `POST /model-pricing` accepts the `ADMIN` role of *any* org. One customer's admin can therefore change prices for every tenant. A real deployment needs a separate operator role, or per-org price overrides.
 - **Idempotency keys never expire and replays are not compared.** A key stays reserved in its org for as long as the event exists, and a repeat with a different body silently returns the original event instead of a `409`.
 - **`/analytics/teams` omits team-less spend.** The query inner-joins `team`, so members without a team are missing from that view (they're still in the other views).
 - **The recompute window is fixed at two days.** Events arriving later still update their rollups at ingest, but the nightly rebuild won't re-check them. The recompute query also filters `usage_event` on `event_time` alone, so it needs its own index, or monthly partitioning, as the table grows.

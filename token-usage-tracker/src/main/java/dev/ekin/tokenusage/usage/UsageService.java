@@ -133,7 +133,8 @@ public class UsageService {
 
 		requireEventTimeInWindow(command.eventTime());
 
-		ModelPricing pricing = pricingService.findActivePricing(command.model(), command.eventTime());
+		ModelPricing pricing = pricingService.findActivePricing(
+				member.getOrgId(), command.model(), command.eventTime());
 		BigDecimal cost = pricingService.computeCost(pricing,
 				command.inputTokens(), command.outputTokens(),
 				command.cacheReadTokens(), command.cacheCreationTokens());
