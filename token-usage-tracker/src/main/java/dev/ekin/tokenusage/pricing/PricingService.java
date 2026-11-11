@@ -9,7 +9,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,11 +42,13 @@ public class PricingService {
 	}
 
 	/**
-	 * Resolves pricing for a model at the given instant. Providers report
-	 * dated snapshot ids, so an exact match falls back to the undated alias,
-	 * and a model with no row at all is looked up in LiteLLM's catalog and
-	 * persisted — usage of a newly released model books without an admin
-	 * having to add its price first.
+	 * Resolves pricing for one org's usage of a model at the given instant.
+	 * An override the org set for itself wins; otherwise the global row
+	 * applies. Providers report dated snapshot ids, so each step tries the
+	 * exact id and then the undated alias: org exact, org alias, global
+	 * exact, global alias. A model with no row at all is looked up in
+	 * LiteLLM's catalog and persisted as a global row — usage of a newly
+	 * released model books without an admin having to add its price first.
 	 *
 	 * <p>Deliberately not transactional, and callers must not hold a
 	 * transaction either: the catalog lookup is a network call, and a slow
@@ -55,17 +60,24 @@ public class PricingService {
 	 * @throws PricingCatalogUnavailableException when the model is not in the
 	 *         table and the catalog cannot be read
 	 */
-	public ModelPricing findActivePricing(String model, Instant at) {
-		Optional<ModelPricing> exact = firstActive(model, at);
-		if (exact.isPresent()) {
-			return exact.get();
+	public ModelPricing findActivePricing(UUID orgId, String model, Instant at) {
+		Matcher dated = DATED_SUFFIX.matcher(model);
+		List<String> candidates = new ArrayList<>(List.of(model));
+		if (dated.matches()) {
+			candidates.add(dated.group(1));
 		}
 
-		Matcher dated = DATED_SUFFIX.matcher(model);
-		if (dated.matches()) {
-			Optional<ModelPricing> alias = firstActive(dated.group(1), at);
-			if (alias.isPresent()) {
-				return alias.get();
+		for (String candidate : candidates) {
+			Optional<ModelPricing> override = modelPricingRepository
+					.findActiveForOrgAt(orgId, candidate, at).stream().findFirst();
+			if (override.isPresent()) {
+				return override.get();
+			}
+		}
+		for (String candidate : candidates) {
+			Optional<ModelPricing> global = firstActive(candidate, at);
+			if (global.isPresent()) {
+				return global.get();
 			}
 		}
 
@@ -77,7 +89,7 @@ public class PricingService {
 	}
 
 	private Optional<ModelPricing> firstActive(String model, Instant at) {
-		return modelPricingRepository.findActiveAt(model, at).stream().findFirst();
+		return modelPricingRepository.findActiveGlobalAt(model, at).stream().findFirst();
 	}
 
 	/**
