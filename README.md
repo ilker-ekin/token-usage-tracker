@@ -54,7 +54,7 @@
 - **Concurrency is designed, not hoped for.** One `INSERT ... ON CONFLICT` upsert per ingest, advisory locks for first-time prices, `SKIP LOCKED` for the webhook outbox, and a test that fires 50 parallel ingests.
 - **Caching without stale reads.** Invalidation is a single Redis `INCR`, with no `KEYS` or `SCAN`, and Redis being down never fails a request.
 - **Security choices are explicit.** An HttpOnly cookie with a CSRF header instead of `localStorage`, rate-limited login that does not reveal which emails exist, SSRF checks on webhook URLs, and signed webhooks.
-- **Honest about its limits.** The [limitations list](#limitations--next-steps) says what is not done yet.
+- **Reviewed and honest about its limits.** A [security review](#security) and its fixes are written up, and the [limitations list](#limitations--next-steps) says what is not done yet.
 
 Details for each of these are in [Design decisions](#design-decisions).
 
@@ -287,6 +287,27 @@ Requires an [Anthropic API key](https://platform.claude.com). `.env` is gitignor
 **Login is rate limited in Redis.** `POST /auth/token` counts failed logins per email (5) and per client address (20) in a 15-minute window, then answers `429` with `Retry-After`; a successful login clears the email's counter. If Redis is down the limit is skipped rather than blocking every login. An unknown email costs the same bcrypt comparison as a wrong password, so response time doesn't reveal which emails have an account. The client address is taken from `X-Forwarded-For` only when the request comes from a private-network proxy such as the bundled nginx.
 
 **Tenant isolation comes from the token.** The org always comes from the JWT (or from the member row on ingest), never from request parameters. Every query is filtered by it. Ingest rejects a project from another org with the same 404 as an unknown project, so tenants can't probe each other's ids. Prices follow the same rule: an admin's price is an override for their own org, so no tenant can change what another tenant's usage costs. Tests cover each endpoint against a second org's data.
+
+## Security
+
+A security review in November 2026 covered authentication, the session cookie and CSRF check, login rate limiting, tenant isolation, ingest, budgets and webhooks, pricing, the Docker images, the CI workflows, and the full git history.
+
+| Finding | Severity | Status |
+|---|---|---|
+| Any org's admin could change model prices for every tenant, because `POST /model-pricing` wrote global rows | High | **Fixed** in [#45](https://github.com/ilker-ekin/token-usage-tracker/pull/45): an admin's price is now an override for their own org only |
+| Budget webhooks were unsigned, so a receiver could not tell a real alert from a forged or replayed one (already listed as a known limitation) | Medium | **Fixed** in [#46](https://github.com/ilker-ekin/token-usage-tracker/pull/46): every request is signed with Standard Webhooks headers |
+| The webhook URL check and the HTTP client resolve DNS separately, so DNS rebinding is possible in theory | Low | Open. Hard to exploit because webhooks must be `https` with a valid certificate; the fix is to connect to the address that was checked |
+| `/actuator/metrics` and `/actuator/info` are readable by any signed-in member, not only admins | Low | Open |
+| The CI workflow has no explicit `permissions` block, so its token gets the repository default | Low | Open |
+
+**No issues found** in these areas:
+- **Git history:** no secrets in any commit or branch.
+- **JWT:** HS256 with a minimum key length, and the app refuses to start with the dev secret outside the `dev` profile.
+- **Session:** the cookie is HttpOnly and SameSite=Strict, and cookie writes need the CSRF header.
+- **Tenant scoping:** every query is filtered by the org from the token.
+- **Injection:** SQL is parameterized, and the dashboard renders no raw HTML.
+- **Dependencies:** `npm audit` reports 0 vulnerabilities.
+- **Containers:** both images run as non-root.
 
 ## Limitations / next steps
 
