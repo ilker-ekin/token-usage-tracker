@@ -287,6 +287,13 @@ function checkLimit(value: unknown): number {
   return n;
 }
 
+/** A secret in the real format. The demo never sends a webhook, so it signs nothing. */
+function demoSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `whsec_${btoa(String.fromCharCode(...bytes))}`;
+}
+
 function requireAdmin(): void {
   if (getRole() !== "admin") throw new ApiError(403, "You do not have access to this.");
 }
@@ -479,7 +486,14 @@ function route(method: string, pathname: string, q: URLSearchParams, body: Body)
       };
       all.push(created);
       saveBudgets();
-      return toBudget(created);
+      // Like the API, the signing secret is in the create response only
+      return { ...toBudget(created), webhookSecret: demoSecret() };
+    }
+
+    const rotate = /^\/budgets\/([^/]+)\/secret$/.exec(pathname);
+    if (rotate && method === "POST") {
+      findBudget(rotate[1]);
+      return { webhookSecret: demoSecret() };
     }
 
     const m = /^\/budgets\/([^/]+)(\/alerts)?$/.exec(pathname);

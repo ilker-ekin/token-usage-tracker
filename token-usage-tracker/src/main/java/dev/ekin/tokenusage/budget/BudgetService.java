@@ -82,6 +82,12 @@ public class BudgetService {
 		budgetRepository.delete(find(orgId, budgetId));
 	}
 
+	/** Gives the budget a new signing secret and returns it; later deliveries use it. */
+	@Transactional
+	public String rotateWebhookSecret(UUID orgId, UUID budgetId) {
+		return find(orgId, budgetId).rotateWebhookSecret();
+	}
+
 	@Transactional(readOnly = true)
 	public List<BudgetAlert> alerts(UUID orgId, UUID budgetId) {
 		find(orgId, budgetId);

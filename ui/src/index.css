@@ -996,3 +996,25 @@ tr.clickable:focus-visible {
   text-align: left;
   border: 1px solid var(--border-strong);
 }
+
+/* ---- Budget signing secret ---- */
+.secret-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.secret-section .label {
+  font-weight: 500;
+}
+.secret-box {
+  display: block;
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  word-break: break-all;
+  user-select: all;
+}

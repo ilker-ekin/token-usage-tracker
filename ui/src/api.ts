@@ -208,6 +208,8 @@ export interface Budget {
   enabled: boolean;
   currentSpendUsd: number;
   createdAt: string;
+  /** Only in the response that creates the budget: the secret that signs its webhooks. */
+  webhookSecret?: string;
 }
 
 export type AlertStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
@@ -318,3 +320,6 @@ export const updateBudget = (id: string, input: BudgetInput) =>
     }),
   });
 export const deleteBudget = (id: string) => request<void>(`/budgets/${id}`, { method: "DELETE" });
+/** Replaces the budget's signing secret; the old one stops working at once. */
+export const rotateBudgetSecret = (id: string) =>
+  request<{ webhookSecret: string }>(`/budgets/${id}/secret`, { method: "POST" });

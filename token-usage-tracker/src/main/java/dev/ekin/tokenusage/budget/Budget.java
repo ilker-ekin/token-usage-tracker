@@ -40,6 +40,13 @@ public class Budget extends BaseEntity {
 	@Column(nullable = false)
 	private boolean enabled;
 
+	/**
+	 * Signs this budget's webhook requests (see {@link WebhookSigner}). The API
+	 * returns it only when it is created or rotated, never in a listing.
+	 */
+	@Column(name = "webhook_secret", nullable = false)
+	private String webhookSecret;
+
 	public Budget(UUID orgId, BudgetScope scopeType, UUID scopeId, BigDecimal monthlyLimitUsd,
 			String webhookUrl, boolean enabled) {
 		this.orgId = orgId;
@@ -48,6 +55,13 @@ public class Budget extends BaseEntity {
 		this.monthlyLimitUsd = monthlyLimitUsd;
 		this.webhookUrl = webhookUrl;
 		this.enabled = enabled;
+		this.webhookSecret = WebhookSigner.newSecret();
+	}
+
+	/** Replaces the signing secret; the old one stops working at once. @return the new secret */
+	String rotateWebhookSecret() {
+		this.webhookSecret = WebhookSigner.newSecret();
+		return webhookSecret;
 	}
 
 	/** The scope is fixed for the life of a budget; everything else can change. */
